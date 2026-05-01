@@ -1,0 +1,297 @@
+{
+  "schemaVersion": "1.0.0",
+  "appVersion": "1.0.0-stage1",
+  "project": {
+    "projectId": "PJT-DEMO-STAGE1-001",
+    "projectName": "Stage 1 Demo — Utility Transformer Motor Feeder",
+    "client": "Demo Client",
+    "plant": "Demo Plant",
+    "area": "Electrical Demo Area",
+    "standard": "IEC",
+    "frequencyHz": 60,
+    "defaultVoltageLevelsKv": [6.6, 0.4],
+    "defaultAmbientTempC": 40,
+    "createdAt": "2026-05-01T00:00:00+09:00",
+    "updatedAt": "2026-05-01T00:00:00+09:00",
+    "lastSavedAt": "2026-05-01T00:00:00+09:00",
+    "lastSavedByText": "stage1-fixture"
+  },
+  "equipment": {
+    "utilities": [
+      {
+        "internalId": "eq_util_001",
+        "tag": "UTL-001",
+        "kind": "utility",
+        "name": "Grid Source",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "connectedBus": "eq_bus_mv_001",
+        "vnKv": 6.6,
+        "scLevelMva": 250,
+        "faultCurrentKa": null,
+        "xrRatio": 10,
+        "voltageFactor": 1,
+        "frequencyHz": 60,
+        "status": "in_service"
+      }
+    ],
+    "generators": [],
+    "buses": [
+      {
+        "internalId": "eq_bus_mv_001",
+        "tag": "BUS-MV-001",
+        "kind": "bus",
+        "name": "6.6 kV MV Bus",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "vnKv": 6.6,
+        "voltageType": "AC",
+        "topology": "3P3W",
+        "minVoltagePct": 95,
+        "maxVoltagePct": 105,
+        "grounding": "resistance"
+      },
+      {
+        "internalId": "eq_bus_lv_001",
+        "tag": "BUS-LV-001",
+        "kind": "bus",
+        "name": "400 V LV Switchboard Bus",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "vnKv": 0.4,
+        "voltageType": "AC",
+        "topology": "3P4W",
+        "minVoltagePct": 95,
+        "maxVoltagePct": 105,
+        "grounding": "TN-S"
+      },
+      {
+        "internalId": "eq_bus_mtr_001",
+        "tag": "BUS-MTR-001",
+        "kind": "bus",
+        "name": "Motor Terminal Bus",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "vnKv": 0.4,
+        "voltageType": "AC",
+        "topology": "3P4W",
+        "minVoltagePct": 95,
+        "maxVoltagePct": 105,
+        "grounding": "TN-S"
+      }
+    ],
+    "transformers": [
+      {
+        "internalId": "eq_tr_001",
+        "tag": "TR-001",
+        "kind": "transformer",
+        "name": "6.6/0.4 kV Distribution Transformer",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "fromBus": "eq_bus_mv_001",
+        "toBus": "eq_bus_lv_001",
+        "snMva": 2,
+        "vnHvKv": 6.6,
+        "vnLvKv": 0.4,
+        "vkPercent": 6,
+        "vkrPercent": 1,
+        "xrRatio": null,
+        "vectorGroup": "Dyn11",
+        "tapPosition": 3,
+        "neutralTap": 3,
+        "tapStepPercent": 2.5,
+        "coolingType": "ONAN",
+        "loadingLimitPct": 100,
+        "status": "in_service"
+      }
+    ],
+    "cables": [
+      {
+        "internalId": "eq_cbl_001",
+        "tag": "CBL-001",
+        "kind": "cable",
+        "name": "LV Motor Feeder Cable",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "fromBus": "eq_bus_lv_001",
+        "toBus": "eq_bus_mtr_001",
+        "voltageGradeKv": 0.6,
+        "coreConfiguration": "3C+E",
+        "conductorMaterial": "Cu",
+        "insulationType": "XLPE",
+        "armourType": "SWA",
+        "conductorSizeMm2": 240,
+        "armourCsaMm2": 50,
+        "lengthM": 80,
+        "rOhmPerKm": 0.0754,
+        "xOhmPerKm": 0.08,
+        "ampacityA": 430,
+        "installationMethod": "tray",
+        "ambientTempC": 40,
+        "soilResistivityK_m_W": null,
+        "groupingCondition": "single circuit",
+        "loadedConductors": 3,
+        "status": "in_service"
+      }
+    ],
+    "breakers": [
+      {
+        "internalId": "eq_brk_001",
+        "tag": "BRK-001",
+        "kind": "breaker",
+        "name": "LV Motor Feeder Breaker",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "deviceType": "breaker",
+        "fromBus": "eq_bus_lv_001",
+        "toBus": "eq_bus_mtr_001",
+        "state": "closed",
+        "ratedVoltageKv": 0.4,
+        "ratedCurrentA": 400,
+        "breakingCapacityKa": 50,
+        "makingCapacityKa": 105,
+        "tripUnitType": "MCCB electronic",
+        "clearingTimeS": 0.1,
+        "upstreamEquipment": "eq_tr_001",
+        "downstreamEquipment": "eq_cbl_001",
+        "status": "in_service"
+      }
+    ],
+    "switches": [],
+    "loads": [],
+    "motors": [
+      {
+        "internalId": "eq_motor_001",
+        "tag": "M-001",
+        "kind": "motor",
+        "name": "Demo LV Motor",
+        "tagSystem": "auto",
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00",
+        "connectedBus": "eq_bus_mtr_001",
+        "ratedKw": 250,
+        "ratedHp": null,
+        "ratedVoltageV": 400,
+        "efficiency": 0.95,
+        "powerFactor": 0.88,
+        "flaA": null,
+        "flaSource": "calculated",
+        "startingCurrentRatio": 6,
+        "startingPowerFactor": 0.3,
+        "startingMethod": "DOL",
+        "serviceFactor": 1,
+        "status": "in_service"
+      }
+    ],
+    "placeholders": []
+  },
+  "diagram": {
+    "nodes": [
+      {
+        "id": "node_util_001",
+        "equipmentInternalId": "eq_util_001",
+        "kind": "utility",
+        "position": { "x": 0, "y": 0 }
+      },
+      {
+        "id": "node_bus_mv_001",
+        "equipmentInternalId": "eq_bus_mv_001",
+        "kind": "bus",
+        "position": { "x": 220, "y": 0 }
+      },
+      {
+        "id": "node_tr_001",
+        "equipmentInternalId": "eq_tr_001",
+        "kind": "transformer",
+        "position": { "x": 440, "y": 0 }
+      },
+      {
+        "id": "node_bus_lv_001",
+        "equipmentInternalId": "eq_bus_lv_001",
+        "kind": "bus",
+        "position": { "x": 660, "y": 0 }
+      },
+      {
+        "id": "node_bus_mtr_001",
+        "equipmentInternalId": "eq_bus_mtr_001",
+        "kind": "bus",
+        "position": { "x": 940, "y": 0 }
+      },
+      {
+        "id": "node_motor_001",
+        "equipmentInternalId": "eq_motor_001",
+        "kind": "motor",
+        "position": { "x": 1160, "y": 0 }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge_util_to_mv_bus",
+        "fromNodeId": "node_util_001",
+        "toNodeId": "node_bus_mv_001",
+        "kind": "connection",
+        "label": "source connection"
+      },
+      {
+        "id": "edge_mv_bus_to_tr",
+        "fromNodeId": "node_bus_mv_001",
+        "toNodeId": "node_tr_001",
+        "kind": "connection",
+        "label": "HV terminal"
+      },
+      {
+        "id": "edge_tr_to_lv_bus",
+        "fromNodeId": "node_tr_001",
+        "toNodeId": "node_bus_lv_001",
+        "kind": "connection",
+        "label": "LV terminal"
+      },
+      {
+        "id": "edge_lv_branch_chain_to_motor_bus",
+        "fromNodeId": "node_bus_lv_001",
+        "toNodeId": "node_bus_mtr_001",
+        "kind": "branch_chain",
+        "branchEquipmentInternalIds": ["eq_brk_001", "eq_cbl_001"],
+        "label": "BRK-001 → CBL-001"
+      },
+      {
+        "id": "edge_motor_bus_to_motor",
+        "fromNodeId": "node_bus_mtr_001",
+        "toNodeId": "node_motor_001",
+        "kind": "connection",
+        "label": "motor connection"
+      }
+    ],
+    "viewport": { "x": 0, "y": 0, "zoom": 1 }
+  },
+  "scenarios": [
+    {
+      "schemaVersion": "1.0.0",
+      "scenarioId": "SCN-NORMAL",
+      "name": "Normal Operation",
+      "description": "Default Stage 1 demo scenario without overrides.",
+      "inheritsFrom": null,
+      "overrides": []
+    }
+  ],
+  "calculationSnapshots": [],
+  "tagCounters": {
+    "UTL": 1,
+    "BUS": 3,
+    "TR": 1,
+    "BRK": 1,
+    "CBL": 1,
+    "M": 1
+  },
+  "validation": {
+    "status": "valid",
+    "issues": []
+  }
+}

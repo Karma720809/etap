@@ -1,0 +1,31 @@
+{
+  "name": "@power-system-study/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@power-system-study/core-model": "workspace:*",
+    "@power-system-study/fixtures": "workspace:*",
+    "@power-system-study/project-io": "workspace:*",
+    "@power-system-study/schemas": "workspace:*",
+    "@power-system-study/validation": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "reactflow": "^11.11.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4"
+  }
+}

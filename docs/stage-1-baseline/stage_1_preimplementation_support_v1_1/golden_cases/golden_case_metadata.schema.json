@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/power-system-study/golden-case-metadata.schema.json",
+  "title": "Power System Study Golden Case Metadata Schema",
+  "type": "object",
+  "required": [
+    "caseId",
+    "module",
+    "title",
+    "standard",
+    "referenceType",
+    "referenceStatus",
+    "referenceSource",
+    "schemaVersion",
+    "appVersion",
+    "tolerance",
+    "input",
+    "expected"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "caseId": { "type": "string", "pattern": "^GC-[A-Z]+-[0-9]{2,}$" },
+    "module": { "enum": ["load-flow", "voltage-drop", "short-circuit", "cable-sizing", "equipment-duty", "invalid-input"] },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "standard": { "enum": ["IEC", "NEC", "IEEE", "User Defined"] },
+    "referenceType": { "enum": ["hand_calculation", "iec_example", "engineering_reference", "verified_excel_sheet", "external_tool", "pandapower", "previous_version"] },
+    "referenceStatus": { "enum": ["verified", "provisional", "regression_only", "deprecated"] },
+    "referenceSource": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "type": "string" },
+    "appVersion": { "type": "string" },
+    "calculationEngineVersion": { "type": "string" },
+    "adapterVersion": { "type": "string" },
+    "tolerance": { "type": "object", "additionalProperties": { "type": "string" } },
+    "input": { "type": "object", "additionalProperties": true },
+    "expected": { "type": "object", "additionalProperties": true },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preparedBy": { "type": "string" },
+        "reviewedBy": { "type": "string" },
+        "preparedAt": { "type": "string" },
+        "reviewedAt": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

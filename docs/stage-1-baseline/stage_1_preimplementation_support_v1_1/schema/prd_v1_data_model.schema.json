@@ -1,0 +1,1500 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/power-system-study/prd-v1-data-model.stage1-canonical.schema.json",
+  "title": "PRD v1.0 Data Model Schema — Stage 1 Canonical Project File",
+  "description": "Canonical project-file schema aligned with Stage 1 Implementation Spec Rev D. PRD Section 8 examples are illustrative; this schema is the implementation boundary for Stage 1 save/load and import validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "appVersion",
+    "project",
+    "equipment",
+    "diagram",
+    "scenarios",
+    "tagCounters"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0.0"
+    },
+    "appVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectMetadata"
+    },
+    "equipment": {
+      "$ref": "#/$defs/EquipmentCollections"
+    },
+    "diagram": {
+      "$ref": "#/$defs/DiagramModel"
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ScenarioModel"
+      }
+    },
+    "calculationSnapshots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CalculationSnapshotPlaceholder"
+      }
+    },
+    "tagCounters": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "validation": {
+      "$ref": "#/$defs/ValidationSummary"
+    }
+  },
+  "x-stage1-top-level-key-order": [
+    "schemaVersion",
+    "appVersion",
+    "project",
+    "equipment",
+    "diagram",
+    "scenarios",
+    "calculationSnapshots",
+    "tagCounters",
+    "validation"
+  ],
+  "$defs": {
+    "NullableNumber": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "NullableString": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "AuditFields": {
+      "type": "object",
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ProjectMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectId",
+        "projectName",
+        "standard",
+        "frequencyHz",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client": {
+          "type": "string"
+        },
+        "plant": {
+          "type": "string"
+        },
+        "area": {
+          "type": "string"
+        },
+        "standard": {
+          "enum": [
+            "IEC",
+            "NEC",
+            "UserDefined"
+          ]
+        },
+        "frequencyHz": {
+          "enum": [
+            50,
+            60
+          ]
+        },
+        "defaultVoltageLevelsKv": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "defaultAmbientTempC": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lastSavedAt": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "lastSavedByText": {
+          "$ref": "#/$defs/NullableString"
+        }
+      }
+    },
+    "EquipmentCollections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "utilities",
+        "generators",
+        "buses",
+        "transformers",
+        "cables",
+        "breakers",
+        "switches",
+        "loads",
+        "motors"
+      ],
+      "properties": {
+        "utilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UtilitySource"
+          }
+        },
+        "generators": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Generator"
+          }
+        },
+        "buses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Bus"
+          }
+        },
+        "transformers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Transformer"
+          }
+        },
+        "cables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cable"
+          }
+        },
+        "breakers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProtectiveDevice"
+          }
+        },
+        "switches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SwitchDevice"
+          }
+        },
+        "loads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Load"
+          }
+        },
+        "motors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Motor"
+          }
+        },
+        "placeholders": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PlaceholderEquipment"
+          }
+        }
+      }
+    },
+    "BaseEquipmentProperties": {
+      "type": "object",
+      "properties": {
+        "internalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "Bus": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/BaseEquipmentProperties"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "internalId",
+            "tag",
+            "kind",
+            "createdAt",
+            "updatedAt",
+            "vnKv",
+            "voltageType",
+            "topology",
+            "minVoltagePct",
+            "maxVoltagePct"
+          ],
+          "properties": {
+            "internalId": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "bus"
+            },
+            "name": {
+              "type": "string"
+            },
+            "tagSystem": {
+              "enum": [
+                "manual",
+                "auto",
+                "KKS",
+                "plant_tag"
+              ]
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "updatedAt": {
+              "type": "string"
+            },
+            "vnKv": {
+              "$ref": "#/$defs/NullableNumber"
+            },
+            "voltageType": {
+              "enum": [
+                "AC",
+                "DC"
+              ]
+            },
+            "topology": {
+              "enum": [
+                "3P3W",
+                "3P4W",
+                "1P2W",
+                "1P3W",
+                "DC2W",
+                "DC3W"
+              ]
+            },
+            "minVoltagePct": {
+              "$ref": "#/$defs/NullableNumber"
+            },
+            "maxVoltagePct": {
+              "$ref": "#/$defs/NullableNumber"
+            },
+            "grounding": {
+              "enum": [
+                "TN-S",
+                "TN-C",
+                "TN-C-S",
+                "TT",
+                "IT",
+                "solid",
+                "resistance",
+                "ungrounded",
+                "unknown"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "UtilitySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "connectedBus",
+        "vnKv",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "utility"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "connectedBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "vnKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "scLevelMva": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "faultCurrentKa": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "xrRatio": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "voltageFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "frequencyHz": {
+          "enum": [
+            50,
+            60
+          ]
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "Generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "connectedBus",
+        "ratedMva",
+        "ratedVoltageKv",
+        "operatingMode",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "generator"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "connectedBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "ratedMva": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "ratedVoltageKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "operatingMode": {
+          "enum": [
+            "out_of_service",
+            "grid_parallel_pq",
+            "pv_voltage_control",
+            "island_isochronous"
+          ]
+        },
+        "pMw": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "qMvar": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "powerFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "voltageSetpointPu": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "xdSubtransientPu": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "Transformer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "fromBus",
+        "toBus",
+        "snMva",
+        "vnHvKv",
+        "vnLvKv",
+        "vkPercent",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "transformer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "fromBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "toBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "snMva": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "vnHvKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "vnLvKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "vkPercent": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "vkrPercent": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "xrRatio": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "vectorGroup": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "tapPosition": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "neutralTap": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "tapStepPercent": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "coolingType": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "loadingLimitPct": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "Cable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "fromBus",
+        "toBus",
+        "voltageGradeKv",
+        "conductorMaterial",
+        "conductorSizeMm2",
+        "lengthM",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "cable"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "fromBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "toBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "voltageGradeKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "coreConfiguration": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "conductorMaterial": {
+          "enum": [
+            "Cu",
+            "Al",
+            "unknown"
+          ]
+        },
+        "insulationType": {
+          "enum": [
+            "PVC",
+            "XLPE",
+            "EPR",
+            "unknown"
+          ]
+        },
+        "armourType": {
+          "enum": [
+            "none",
+            "SWA",
+            "AWA",
+            "STA",
+            "unknown"
+          ]
+        },
+        "conductorSizeMm2": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "armourCsaMm2": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "lengthM": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "rOhmPerKm": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "xOhmPerKm": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "ampacityA": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "installationMethod": {
+          "enum": [
+            "tray",
+            "buried",
+            "conduit",
+            "ladder",
+            "air",
+            "unknown"
+          ]
+        },
+        "ambientTempC": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "soilResistivityK_m_W": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "groupingCondition": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "loadedConductors": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "Load": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "connectedBus",
+        "loadType",
+        "kw",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "load"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "connectedBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "loadType": {
+          "enum": [
+            "static_load",
+            "mixed_load",
+            "spare",
+            "other"
+          ]
+        },
+        "kw": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "kvar": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "powerFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "demandFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "Motor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "connectedBus",
+        "ratedKw",
+        "ratedVoltageV",
+        "flaSource",
+        "startingMethod",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "motor"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "connectedBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "ratedKw": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "ratedHp": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "ratedVoltageV": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "efficiency": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "powerFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "flaA": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "flaSource": {
+          "enum": [
+            "user_input",
+            "calculated",
+            "vendor_data",
+            "unknown"
+          ]
+        },
+        "startingCurrentRatio": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "startingPowerFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "startingMethod": {
+          "enum": [
+            "DOL",
+            "star_delta",
+            "VFD",
+            "soft_starter",
+            "unknown"
+          ]
+        },
+        "serviceFactor": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "SwitchDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "fromBus",
+        "toBus",
+        "state",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "switch"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "fromBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "toBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "normalState": {
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "ratedVoltageKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "ratedCurrentA": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "ProtectiveDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "deviceType",
+        "fromBus",
+        "toBus",
+        "state",
+        "ratedVoltageKv",
+        "ratedCurrentA",
+        "status"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "breaker"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "deviceType": {
+          "enum": [
+            "breaker",
+            "fuse",
+            "relay"
+          ]
+        },
+        "fromBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "toBus": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "ratedVoltageKv": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "ratedCurrentA": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "breakingCapacityKa": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "makingCapacityKa": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "tripUnitType": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "clearingTimeS": {
+          "$ref": "#/$defs/NullableNumber"
+        },
+        "upstreamEquipment": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "downstreamEquipment": {
+          "$ref": "#/$defs/NullableString"
+        },
+        "status": {
+          "enum": [
+            "in_service",
+            "out_of_service"
+          ]
+        }
+      }
+    },
+    "PlaceholderEquipment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "internalId",
+        "tag",
+        "kind",
+        "createdAt",
+        "updatedAt",
+        "containedBusIds"
+      ],
+      "properties": {
+        "internalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "mcc_placeholder",
+            "switchgear_placeholder"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "tagSystem": {
+          "enum": [
+            "manual",
+            "auto",
+            "KKS",
+            "plant_tag"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "containedBusIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "DiagramModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes",
+        "edges"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiagramNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiagramEdge"
+          }
+        },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x",
+            "y",
+            "zoom"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "zoom": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      }
+    },
+    "DiagramNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "equipmentInternalId",
+        "kind",
+        "position"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "equipmentInternalId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "utility",
+            "generator",
+            "bus",
+            "transformer",
+            "cable",
+            "breaker",
+            "switch",
+            "load",
+            "motor",
+            "mcc_placeholder",
+            "switchgear_placeholder"
+          ]
+        },
+        "position": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x",
+            "y"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          }
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "collapsed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "DiagramEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "fromNodeId",
+        "toNodeId",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fromNodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toNodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "connection",
+            "branch_chain"
+          ]
+        },
+        "equipmentInternalId": {
+          "type": "string"
+        },
+        "branchEquipmentInternalIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "branch_chain"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "branchEquipmentInternalIds"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "connection"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "branchEquipmentInternalIds"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ScenarioModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "scenarioId",
+        "name",
+        "inheritsFrom",
+        "overrides"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0.0"
+        },
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "inheritsFrom": {
+          "type": "null"
+        },
+        "overrides": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScenarioOverride"
+          }
+        }
+      }
+    },
+    "ScenarioOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "value",
+        "reason"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {},
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "CalculationSnapshotPlaceholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshotId",
+        "createdAt",
+        "module",
+        "status"
+      ],
+      "properties": {
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "module": {
+          "enum": [
+            "load_flow",
+            "voltage_drop",
+            "short_circuit",
+            "cable_sizing",
+            "equipment_duty"
+          ]
+        },
+        "status": {
+          "const": "placeholder_reserved"
+        }
+      }
+    },
+    "ValidationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "issues"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "valid",
+            "warning",
+            "error"
+          ]
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidationIssue"
+          }
+        }
+      }
+    },
+    "ValidationIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "equipmentInternalId": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$comment": "Stage 1 Project File JSON Schema Rev D. Semantically aligned with Rev C; formatted deterministically. Loader warning/error behavior is defined in the Zod reference loader, not in JSON Schema.",
+  "x-canonicalPolicy": {
+    "decision": "Stage 1 project-file schema is canonical for implementation.",
+    "rationale": "Stage 1 schema reflects the reviewed implementation model: connectedBus/status fields, transformer-as-node diagram model, branch_chain ordering, tagCounters, saved validation audit reference, and reserved calculationSnapshots.",
+    "prdSection8Status": "illustrative_examples"
+  }
+}

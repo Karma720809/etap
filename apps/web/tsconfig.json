@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../../packages/schemas" },
+    { "path": "../../packages/core-model" },
+    { "path": "../../packages/project-io" },
+    { "path": "../../packages/validation" },
+    { "path": "../../packages/fixtures" }
+  ]
+}

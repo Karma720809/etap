@@ -1,0 +1,1733 @@
+# Stage 1 Implementation Spec — One-Line Diagram MVP
+
+**Project:** Power System Study App  
+**Baseline:** PRD v1.0 Final  
+**Stage:** Stage 1 — One-Line Diagram MVP  
+**Document Status:** Implementation-ready draft — Rev A  
+**Date:** 2026-05-01
+
+---
+
+## 1. Purpose
+
+Stage 1 builds the first usable foundation of the Power System Study App: a file-based one-line diagram editor with project data, equipment data, diagram connectivity, JSON save/load, and basic validation.
+
+Stage 1 does **not** implement Load Flow, Voltage Drop, Short Circuit, Cable Sizing, Equipment Duty Check, or Report Export calculation logic. Those modules are reserved for later stages. The purpose of Stage 1 is to make the data model, diagram model, and validation structure stable enough for calculation engines to be added later without refactoring the core project schema.
+
+Stage 1 must preserve the PRD v1.0 Final principles:
+
+- Single Source of Truth
+- internalId / tag separation
+- canonical app standard data model
+- JSON-first file-based workflow
+- fail-closed validation for invalid model states
+- warning/error code based validation output
+- calculation module placeholders without fake results
+
+Rev A closes the pre-implementation modeling decisions raised during Stage 1 review: transformer rendering, branch-chain representation, draft/incomplete equipment validation, topology enum policy, monotonic tag counters, and deterministic JSON serialization.
+
+Rev D keeps Rev C as the implementation baseline and closes the final pre-implementation review findings: `loadProjectFile` must surface schema warnings and schema errors together, the reference runtime schema is explicitly Zod v4, and first PR boundaries should avoid overloading the initial model/save-load PR.
+
+---
+
+## 2. Stage 1 Scope
+
+### 2.1 Included
+
+| Area | Included | Notes |
+|---|---:|---|
+| Project creation | Yes | Create new project with project metadata |
+| JSON save/load | Yes | Save and restore full project state |
+| One-line diagram canvas | Yes | React Flow based canvas |
+| Equipment palette | Yes | Create supported equipment types |
+| Equipment property panel | Yes | Edit selected equipment data |
+| internalId / tag separation | Yes | internalId immutable, tag editable |
+| Node-edge connectivity | Yes | Diagram graph and equipment references must stay consistent |
+| Basic validation | Yes | Model integrity validation only |
+| Warning/error panel | Yes | Show validation results using code system |
+| Calculation status placeholder | Yes | Show disabled/not implemented state |
+| Scenario structure placeholder | Yes | Keep schema-ready empty scenario array |
+| Calculation snapshot placeholder | Yes, reserved only | Keep optional empty arrays for forward compatibility; do not generate real calculation snapshots yet |
+
+### 2.2 Excluded
+
+| Area | Excluded Reason |
+|---|---|
+| Load Flow calculation | Stage 2 |
+| Voltage Drop calculation | Stage 2 |
+| Short Circuit calculation | Stage 3 |
+| Equipment Duty Check | Stage 3 |
+| Cable Sizing integration | Stage 4 |
+| Excel/PDF report export | Stage 5 |
+| Protection Coordination / TCC Viewer | Post-MVP |
+| Arc Flash | Post-MVP |
+| Dynamic motor starting | Post-MVP |
+| Global equipment library | Post-MVP |
+| Multi-user collaboration | Post-MVP |
+
+---
+
+## 3. Recommended Repository Structure
+
+Stage 1 should start with a minimal monorepo structure. Calculation packages are intentionally deferred.
+
+```text
+power-system-study/
+  apps/
+    web/
+      src/
+        app/
+        components/
+        diagram/
+        equipment/
+        validation/
+        project-io/
+        state/
+        styles/
+
+  packages/
+    core-model/
+      src/
+        ids.ts
+        project.ts
+        equipment.ts
+        diagram.ts
+        scenario.ts
+        validation.ts
+        index.ts
+
+    validation/
+      src/
+        validateProject.ts
+        validateEquipment.ts
+        validateDiagram.ts
+        validateConnectivity.ts
+        index.ts
+
+    error-codes/
+      src/
+        codes.ts
+        messages.ts
+        index.ts
+
+    project-io/
+      src/
+        saveProject.ts
+        loadProject.ts
+        migrateProject.ts
+        index.ts
+```
+
+Future packages, not required in Stage 1:
+
+```text
+packages/
+  engine-load-flow/        # Stage 2
+  engine-voltage-drop/     # Stage 2
+  engine-short-circuit/    # Stage 3
+  engine-cable-sizing/     # Stage 4
+  report/                  # Stage 5
+  golden-cases/            # Stage 2+
+  standards/               # Stage 2+
+```
+
+---
+
+## 4. Core Design Decisions for Stage 1
+
+### 4.1 Equipment ID Policy
+
+Every equipment item has two identifiers:
+
+| Field | Meaning | Editable | Example |
+|---|---|---:|---|
+| `internalId` | App-internal immutable identifier | No | `eq_bus_01HY8...` |
+| `tag` | User-visible equipment tag | Yes | `BUS-001`, `TR-001`, `M-101A` |
+
+Rules:
+
+1. `internalId` is generated by the app.
+2. `internalId` must be unique within a project.
+3. `tag` is shown to the user and may be edited.
+4. Duplicate `tag` is configurable later; Stage 1 default is warning, not error.
+5. Diagram node IDs should use `internalId` where possible.
+6. Saved JSON must not depend on user-visible tag for internal references.
+
+### 4.2 Stage 1 Calculation Policy
+
+Calculation buttons may be visible, but they must not run fake or placeholder calculations.
+
+Allowed UI state:
+
+```text
+Load Flow: Not implemented in Stage 1
+Short Circuit: Not implemented in Stage 1
+Cable Sizing: Not implemented in Stage 1
+Report Export: Not implemented in Stage 1
+```
+
+If the project has validation errors, calculation buttons should additionally show:
+
+```text
+Calculation disabled: input model has validation errors
+```
+
+### 4.3 Project Data Is the Source of Truth
+
+The diagram is a visual representation of project data. Equipment data must not live only inside React Flow node data. React Flow node/edge objects may contain display metadata, but the canonical engineering data must be stored in the project equipment collections.
+
+
+### 4.4 Draft vs Calculation-Ready Validation
+
+Stage 1 is an editor-first stage. A newly created equipment item will often have required engineering fields still blank. The UI must therefore distinguish **incomplete draft data** from **invalid engineering data**.
+
+Rules:
+
+1. A newly created equipment item with missing required fields is reported as `I-EQ-001` while the project is being edited.
+2. A non-positive value, invalid enum value, missing referenced bus, duplicate internalId, or broken diagram reference is always an error.
+3. `E-EQ-001` is reserved for calculation-readiness validation, import validation, or an equipment item explicitly marked complete in a later workflow.
+4. Stage 1 calculation buttons are not implemented; therefore they must not convert incomplete draft data into fake calculation output.
+5. Future calculation stages may run a stricter `validateForCalculation()` pass that escalates missing required fields from `I-EQ-001` to `E-EQ-001`.
+
+This policy prevents a new blank project or a newly added bus from immediately producing a large error list before the user has had time to enter data.
+
+### 4.5 Empty Project Validation Policy
+
+An empty project is a valid editable state.
+
+Rules:
+
+1. If the project has no equipment, show `I-NET-001` such as `Project is empty; add a source and bus to begin.`
+2. Do not raise `E-NET-001` for a completely empty project.
+3. Raise `E-NET-001` only when the project contains electrical equipment requiring a source path but no in-service utility source exists.
+4. Floating-bus checks apply only after at least one bus or branch has been created.
+
+### 4.6 Saved Validation Policy
+
+Validation is both a runtime-derived state and a saved audit reference.
+
+Decision:
+
+1. Stage 1 project files may persist a `validation` summary.
+2. The persisted `validation` summary records the validation state at the time of save.
+3. When a file is loaded, the app must run fresh validation again from the loaded project data.
+4. Runtime validation state is authoritative for the current UI session.
+5. The saved validation summary is useful for audit and git review, but it must not be trusted as the sole current validation result after load.
+6. On the next save, the file-level `validation` summary is replaced by the latest fresh validation result.
+
+This policy allows EPC reviewers to see what validation status was committed with the file, while still preventing stale saved validation from masking current model issues.
+
+### 4.7 Transformer and Branch Representation Decision
+
+Stage 1 uses the following diagram representation to avoid ambiguity during Stage 2 network conversion.
+
+| Equipment | Canonical engineering model | Diagram representation |
+|---|---|---|
+| Bus | Node equipment | Diagram node |
+| Utility / Generator / Load / Motor | Bus-connected equipment | Diagram node attached to a bus |
+| Transformer | Branch equipment with `fromBus` and `toBus` | **Diagram node** with two bus connections |
+| Cable / Breaker / Switch | Branch equipment with `fromBus` and `toBus` | Ordered branch-chain item rendered on a diagram edge |
+| MCC / Switchgear placeholder | Visual container | Diagram node/container only |
+
+Decision:
+
+1. **Transformer is always rendered as a diagram node**, not as a diagram edge.
+2. Cable, breaker, and switch may appear in an ordered branch chain between two bus nodes.
+3. A branch chain can represent practical one-line sequences such as `Bus -> Breaker -> Cable -> Bus`.
+4. The canonical engineering data remains in equipment collections; the branch chain only records visual/order information and connectivity.
+5. Stage 2 network conversion shall use equipment `fromBus` / `toBus` plus branch-chain order to build the app standard network model.
+
+### 4.8 Branch Chain Policy
+
+For Stage 1, serial branch elements shall be represented by a branch chain rather than by hidden junction nodes.
+
+Example:
+
+```json
+{
+  "id": "edge_branch_001",
+  "fromNodeId": "eq_bus_lv_001",
+  "toNodeId": "eq_bus_motor_terminal_001",
+  "branchEquipmentInternalIds": [
+    "eq_brk_001",
+    "eq_cbl_001"
+  ],
+  "kind": "branch_chain"
+}
+```
+
+Rules:
+
+1. `branchEquipmentInternalIds` is ordered from upstream to downstream for display and later conversion.
+2. Each referenced branch equipment must exist in `equipment.cables`, `equipment.breakers`, or `equipment.switches`.
+3. For Stage 1, all equipment in the same branch chain should share the same `fromBus` and `toBus` values.
+4. If branch-chain endpoints and equipment `fromBus`/`toBus` disagree, raise `W-NET-001` in Stage 1; later calculation stages may escalate this to error.
+5. Hidden junction nodes are not used in Stage 1.
+
+---
+
+## 5. TypeScript Data Model
+
+### 5.1 Common Types
+
+```ts
+export type SchemaVersion = "1.0.0";
+
+// Stage 1 keeps the v1.0 schema identifier and reserves optional fields
+// for later calculation snapshots to avoid avoidable schema migration.
+// Stage 1 does not store calculation results.
+
+export type StandardBasis = "IEC" | "NEC" | "UserDefined";
+
+export type EquipmentKind =
+  | "utility"
+  | "generator"
+  | "bus"
+  | "transformer"
+  | "cable"
+  | "breaker"
+  | "switch"
+  | "load"
+  | "motor"
+  | "mcc_placeholder"
+  | "switchgear_placeholder";
+
+export type EquipmentStatus = "in_service" | "out_of_service";
+
+export interface AuditFields {
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BaseEquipment extends AuditFields {
+  internalId: string;
+  tag: string;
+  kind: EquipmentKind;
+  name?: string;
+  tagSystem?: "manual" | "auto" | "KKS" | "plant_tag";
+}
+```
+
+### 5.2 Project Model
+
+```ts
+export interface ProjectMetadata {
+  projectId: string;
+  projectName: string;
+  client?: string;
+  plant?: string;
+  area?: string;
+  standard: StandardBasis;
+  frequencyHz: 50 | 60;
+  defaultVoltageLevelsKv?: number[];
+  defaultAmbientTempC?: number;
+  createdAt: string;
+  updatedAt: string;
+  lastSavedAt?: string;
+  lastSavedByText?: string;
+}
+
+export type TagCounterMap = Record<string, number>;
+
+export interface CalculationSnapshotPlaceholder {
+  // Reserved for Stage 2+. Stage 1 must not generate real snapshots.
+  snapshotId: string;
+  createdAt: string;
+  module: "load_flow" | "voltage_drop" | "short_circuit" | "cable_sizing" | "equipment_duty";
+  status: "placeholder_reserved";
+}
+
+export interface PowerSystemProjectFile {
+  schemaVersion: SchemaVersion;
+  appVersion: string;
+  project: ProjectMetadata;
+  equipment: EquipmentCollections;
+  diagram: DiagramModel;
+  scenarios: ScenarioModel[];
+  calculationSnapshots?: CalculationSnapshotPlaceholder[];
+  tagCounters: TagCounterMap;
+  // Saved audit reference. Fresh validation is recomputed after load.
+  validation?: ValidationSummary;
+}
+```
+
+### 5.3 Equipment Collections
+
+```ts
+export interface EquipmentCollections {
+  utilities: UtilitySource[];
+  generators: Generator[];
+  buses: Bus[];
+  transformers: Transformer[];
+  cables: Cable[];
+  breakers: ProtectiveDevice[];
+  switches: SwitchDevice[];
+  loads: Load[];
+  motors: Motor[];
+  placeholders?: PlaceholderEquipment[];
+}
+```
+
+### 5.4 Bus
+
+```ts
+export type Topology = "3P3W" | "3P4W" | "1P2W" | "1P3W" | "DC2W" | "DC3W";
+export type VoltageType = "AC" | "DC";
+
+export interface Bus extends BaseEquipment {
+  kind: "bus";
+  vnKv: number | null;
+  voltageType: VoltageType;
+  topology: Topology;
+  minVoltagePct: number | null;
+  maxVoltagePct: number | null;
+  grounding?: "TN-S" | "TN-C" | "TN-C-S" | "TT" | "IT" | "solid" | "resistance" | "ungrounded" | "unknown";
+}
+```
+
+Stage 1 rule:
+
+- The form may show future topology options.
+- `phaseSystem` and `wireSystem` are derived from `topology` and are not stored as independent editable fields in Stage 1.
+- Integrated Power System Study calculations are later limited to balanced 3-phase cases: `3P3W` and `3P4W`.
+- Stage 1 validation should warn, not fail, when non-3P topology is created because calculations are not yet running.
+
+### 5.5 Utility Source
+
+```ts
+export interface UtilitySource extends BaseEquipment {
+  kind: "utility";
+  connectedBus: string | null;      // Bus internalId
+  vnKv: number | null;
+  scLevelMva?: number | null;
+  faultCurrentKa?: number | null;
+  xrRatio?: number | null;
+  voltageFactor?: number | null;
+  frequencyHz?: 50 | 60;
+  status: EquipmentStatus;
+}
+```
+
+### 5.6 Generator
+
+```ts
+export type GeneratorOperatingMode =
+  | "out_of_service"
+  | "grid_parallel_pq"
+  | "pv_voltage_control"
+  | "island_isochronous";
+
+export interface Generator extends BaseEquipment {
+  kind: "generator";
+  connectedBus: string | null;      // Bus internalId
+  ratedMva: number | null;
+  ratedVoltageKv: number | null;
+  operatingMode: GeneratorOperatingMode;
+  pMw?: number | null;
+  qMvar?: number | null;
+  powerFactor?: number | null;
+  voltageSetpointPu?: number | null;
+  xdSubtransientPu?: number | null;
+  status: EquipmentStatus;
+}
+```
+
+Stage 1 UI rule:
+
+- Allow users to enter all fields required by the PRD.
+- Display `pv_voltage_control` and `island_isochronous` as future/provisional modes.
+- Later calculation release gate only allows `out_of_service` and `grid_parallel_pq` until verified Golden Cases exist.
+- `pMw`, `qMvar`, and `powerFactor` are nullable in Stage 1 because they are conditionally required only when `operatingMode = grid_parallel_pq`.
+
+### 5.7 Transformer
+
+```ts
+export interface Transformer extends BaseEquipment {
+  kind: "transformer";
+  fromBus: string | null;           // HV-side Bus internalId
+  toBus: string | null;             // LV-side Bus internalId
+  snMva: number | null;
+  vnHvKv: number | null;
+  vnLvKv: number | null;
+  vkPercent: number | null;
+  vkrPercent?: number | null;
+  xrRatio?: number | null;
+  vectorGroup?: string | null;
+  tapPosition?: number | null;
+  neutralTap?: number | null;
+  tapStepPercent?: number | null;
+  coolingType?: string | null;
+  loadingLimitPct?: number | null;
+  status: EquipmentStatus;
+}
+```
+
+### 5.8 Cable
+
+```ts
+export interface Cable extends BaseEquipment {
+  kind: "cable";
+  fromBus: string | null;
+  toBus: string | null;
+  voltageGradeKv: number | null;
+  coreConfiguration?: string | null;
+  conductorMaterial: "Cu" | "Al" | "unknown";
+  insulationType?: "PVC" | "XLPE" | "EPR" | "unknown";
+  armourType?: "none" | "SWA" | "AWA" | "STA" | "unknown";
+  conductorSizeMm2: number | null;
+  armourCsaMm2?: number | null;
+  lengthM: number | null;
+  rOhmPerKm?: number | null;
+  xOhmPerKm?: number | null;
+  ampacityA?: number | null;
+  installationMethod?: "tray" | "buried" | "conduit" | "ladder" | "air" | "unknown";
+  ambientTempC?: number | null;
+  soilResistivityK_m_W?: number | null;
+  groupingCondition?: string | null;
+  loadedConductors?: number | null;
+  status: EquipmentStatus;
+}
+```
+
+### 5.9 Load
+
+```ts
+export type LoadType = "static_load" | "mixed_load" | "spare" | "other";
+
+export interface Load extends BaseEquipment {
+  kind: "load";
+  connectedBus: string | null;
+  loadType: LoadType;
+  kw: number | null;
+  kvar?: number | null;
+  powerFactor?: number | null;
+  demandFactor?: number | null;
+  status: EquipmentStatus;
+}
+```
+
+### 5.10 Motor
+
+```ts
+export type MotorStartingMethod = "DOL" | "star_delta" | "VFD" | "soft_starter" | "unknown";
+export type FlaSource = "user_input" | "calculated" | "vendor_data" | "unknown";
+
+export interface Motor extends BaseEquipment {
+  kind: "motor";
+  connectedBus: string | null;
+  ratedKw: number | null;
+  ratedHp?: number | null;
+  ratedVoltageV: number | null;
+  efficiency?: number | null;
+  powerFactor?: number | null;
+  flaA?: number | null;
+  flaSource: FlaSource;
+  startingCurrentRatio?: number | null;
+  startingPowerFactor?: number | null;
+  startingMethod: MotorStartingMethod;
+  serviceFactor?: number | null;
+  status: EquipmentStatus;
+}
+```
+
+### 5.11 Switch
+
+```ts
+export interface SwitchDevice extends BaseEquipment {
+  kind: "switch";
+  fromBus: string | null;
+  toBus: string | null;
+  state: "open" | "closed";
+  normalState?: "open" | "closed";
+  ratedVoltageKv?: number | null;
+  ratedCurrentA?: number | null;
+  status: EquipmentStatus;
+}
+```
+
+### 5.12 Breaker / Fuse / Relay
+
+```ts
+export type ProtectiveDeviceType = "breaker" | "fuse" | "relay";
+
+export interface ProtectiveDevice extends BaseEquipment {
+  kind: "breaker";
+  deviceType: ProtectiveDeviceType;
+  fromBus: string | null;
+  toBus: string | null;
+  state: "open" | "closed";
+  ratedVoltageKv: number | null;
+  ratedCurrentA: number | null;
+  breakingCapacityKa?: number | null;
+  makingCapacityKa?: number | null;
+  tripUnitType?: string | null;
+  clearingTimeS?: number | null;
+  upstreamEquipment?: string | null;     // internalId, optional
+  downstreamEquipment?: string | null;   // internalId, optional
+  status: EquipmentStatus;
+}
+```
+
+Stage 1 note:
+
+- `kind: "breaker"` is used for the one-line branch element.
+- `deviceType` distinguishes breaker, fuse, and relay.
+- TCC curve data is not included.
+
+### 5.13 Placeholder Equipment
+
+```ts
+export interface PlaceholderEquipment extends BaseEquipment {
+  kind: "mcc_placeholder" | "switchgear_placeholder";
+  containedBusIds: string[];
+  description?: string;
+}
+```
+
+Placeholder policy:
+
+- MCC and switchgear are visual/container placeholders only.
+- Calculation source of truth remains Bus, Breaker, Cable, Load, Motor, Transformer, and Source.
+
+---
+
+## 6. Diagram Model
+
+### 6.1 Diagram Node
+
+```ts
+export interface DiagramNodeModel {
+  id: string;                       // preferably same as equipment internalId
+  equipmentInternalId: string;
+  kind: EquipmentKind;
+  position: {
+    x: number;
+    y: number;
+  };
+  width?: number;
+  height?: number;
+  selected?: boolean;
+  collapsed?: boolean;
+}
+```
+
+### 6.2 Diagram Edge
+
+```ts
+export interface DiagramEdgeModel {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: "connection" | "branch_chain";
+  equipmentInternalId?: string;       // optional single equipment visual link
+  branchEquipmentInternalIds?: string[]; // ordered cable/breaker/switch internalIds
+  label?: string;
+}
+```
+
+Edge meaning:
+
+| Edge kind | Meaning | Typical use |
+|---|---|---|
+| `connection` | Non-branch visual/electrical attachment between two diagram nodes | Bus to Utility, Generator, Load, Motor, Transformer terminal connection |
+| `branch_chain` | Ordered serial branch equipment between two bus-side nodes | Bus to Bus path containing Breaker, Cable, Switch |
+
+Rules:
+
+1. `connection` edges do not carry cable/breaker/switch branch-chain ordering. A `connection` edge **must not** include `branchEquipmentInternalIds`.
+2. `branch_chain` edges must use `branchEquipmentInternalIds` and preserve upstream-to-downstream order.
+3. A transformer remains a diagram node; the transformer-to-bus links are represented by `connection` edges.
+4. Schema-level validators must reject a `connection` edge that contains `branchEquipmentInternalIds`, because that silently converts a non-branch visual attachment into a calculation-relevant branch path.
+
+### 6.3 Diagram Model
+
+```ts
+export interface DiagramModel {
+  nodes: DiagramNodeModel[];
+  edges: DiagramEdgeModel[];
+  viewport?: {
+    x: number;
+    y: number;
+    zoom: number;
+  };
+}
+```
+
+### 6.4 React Flow Mapping
+
+React Flow must be treated as a renderer, not as the canonical data model.
+
+```ts
+function toReactFlowNodes(project: PowerSystemProjectFile): Node[];
+function toReactFlowEdges(project: PowerSystemProjectFile): Edge[];
+function fromReactFlowChange(...): DiagramModel;
+```
+
+Rules:
+
+1. React Flow node `id` should equal `DiagramNodeModel.id`.
+2. `DiagramNodeModel.equipmentInternalId` links the diagram node to equipment data.
+3. Transformer equipment appears as a React Flow node.
+4. Cable, breaker, and switch equipment appear as ordered `branch_chain` items on diagram edges.
+5. The canonical equipment object must remain in `equipment.cables`, `equipment.breakers`, `equipment.switches`, or `equipment.transformers`.
+6. Moving a diagram element updates only diagram position, not engineering data.
+7. Editing property panel updates equipment collection, not React Flow-only metadata.
+
+---
+
+## 7. Project JSON Schema Example
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "appVersion": "1.0.0",
+  "project": {
+    "projectId": "PJT-001",
+    "projectName": "HyREX Power Study",
+    "client": "",
+    "plant": "",
+    "area": "",
+    "standard": "IEC",
+    "frequencyHz": 60,
+    "defaultVoltageLevelsKv": [6.6, 0.4],
+    "defaultAmbientTempC": 40,
+    "createdAt": "2026-05-01T00:00:00+09:00",
+    "updatedAt": "2026-05-01T00:00:00+09:00",
+    "lastSavedAt": null,
+    "lastSavedByText": null
+  },
+  "equipment": {
+    "utilities": [],
+    "generators": [],
+    "buses": [],
+    "transformers": [],
+    "cables": [],
+    "breakers": [],
+    "switches": [],
+    "loads": [],
+    "motors": [],
+    "placeholders": []
+  },
+  "diagram": {
+    "nodes": [],
+    "edges": [],
+    "viewport": {
+      "x": 0,
+      "y": 0,
+      "zoom": 1
+    }
+  },
+  "scenarios": [],
+  "calculationSnapshots": [],
+  "tagCounters": {},
+  "validation": {
+    "status": "valid",
+    "issues": []
+  }
+}
+```
+
+---
+
+## 8. Scenario Placeholder for Stage 1
+
+Stage 1 does not need full scenario editing. However, the project file must keep a schema-ready `scenarios` array.
+
+```ts
+export interface ScenarioModel {
+  schemaVersion: "1.0.0";
+  scenarioId: string;
+  name: string;
+  description?: string;
+  inheritsFrom: null;
+  overrides: ScenarioOverride[];
+}
+
+export interface ScenarioOverride {
+  path: string;       // canonical path: <collection>.<internalId>.<fieldPath>
+  value: unknown;
+  reason: string;
+}
+```
+
+Stage 1 default:
+
+```json
+"scenarios": []
+```
+
+Stage 1 may optionally create a default scenario:
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "scenarioId": "SCN-NORMAL",
+  "name": "Normal Operation",
+  "inheritsFrom": null,
+  "overrides": []
+}
+```
+
+Canonical path examples:
+
+```text
+utilities.eq_util_001.scLevelMva
+transformers.eq_tr_001.vkPercent
+motors.eq_motor_005.status
+breakers.eq_brk_001.state
+switches.eq_sw_001.state
+```
+
+---
+
+## 9. UI / UX Specification
+
+### 9.1 Main Layout
+
+```text
+┌────────────────────┬──────────────────────────────┬─────────────────────────┐
+│ Left Panel          │ Center Canvas                │ Right Panel             │
+│ - Equipment Palette │ - One-Line Diagram           │ - Property Form         │
+│ - Project Tree      │ - React Flow controls        │ - Selected Equipment    │
+├────────────────────┴──────────────────────────────┴─────────────────────────┤
+│ Bottom Panel: Validation / Warning / Error / Calculation Status              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 Left Panel
+
+#### Equipment Palette
+
+Required palette items:
+
+```text
+Utility / Grid Source
+Generator
+Bus
+Transformer
+Cable
+Breaker
+Switch
+Load
+Motor
+MCC Placeholder
+Switchgear Placeholder
+```
+
+Creation behavior:
+
+1. User clicks or drags palette item.
+2. App creates equipment object with generated `internalId`.
+3. App assigns default tag using tag suggestion rule.
+4. App creates corresponding diagram node or edge placeholder.
+5. App selects the new equipment and opens property panel.
+
+#### Project Tree
+
+Minimum tree structure:
+
+```text
+Project
+  Sources
+  Generators
+  Buses
+  Transformers
+  Cables
+  Breakers / Protective Devices
+  Switches
+  Loads
+  Motors
+  Placeholders
+  Scenarios
+```
+
+Selecting an item in the tree should select the diagram object if it exists.
+
+### 9.3 Center Canvas
+
+Required features:
+
+- Pan
+- Zoom
+- Select equipment
+- Move nodes
+- Connect buses/equipment where allowed
+- Delete selected item
+- Display tag labels
+- Display basic visual distinction by equipment kind
+- Show open/closed state label for breaker/switch
+
+Stage 1 does not need advanced single-line electrical symbols, but visual placeholders should be clear enough for engineering review.
+
+### 9.4 Right Property Panel
+
+Required behavior:
+
+1. No selection: show project summary.
+2. Single equipment selected: show equipment-specific form.
+3. Multiple selection: show count and bulk actions only.
+4. Tag field editable.
+5. internalId visible as read-only advanced field.
+6. Invalid fields should be highlighted.
+7. Changing a property immediately updates project state and validation result.
+
+### 9.5 Bottom Panel
+
+Tabs:
+
+```text
+Validation
+Warnings
+Errors
+Calculation Status
+```
+
+Calculation Status in Stage 1:
+
+```text
+Load Flow: Not implemented in Stage 1
+Voltage Drop: Not implemented in Stage 1
+Short Circuit: Not implemented in Stage 1
+Cable Sizing: Not implemented in Stage 1
+Report Export: Not implemented in Stage 1
+```
+
+---
+
+## 10. Equipment Form Fields
+
+### 10.1 Project Form
+
+| Field | Type | Required | Default |
+|---|---|---:|---|
+| Project name | string | Yes | `Untitled Power Study` |
+| Client | string | No | empty |
+| Plant | string | No | empty |
+| Area | string | No | empty |
+| Standard | enum | Yes | `IEC` |
+| Frequency | enum | Yes | `60` or user selection |
+| Default voltage levels | number[] | No | `[6.6, 0.4]` |
+| Default ambient temperature | number | No | `40` |
+
+### 10.2 Bus Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | user-visible tag |
+| name | string | No | |
+| nominal voltage `vnKv` | number | Yes | positive |
+| voltage type | enum | Yes | AC default |
+| topology | enum | Yes | 3P3W default; phase/wire are derived |
+| min voltage % | number | No | default 95 |
+| max voltage % | number | No | default 105 |
+| grounding | enum | No | unknown allowed |
+
+### 10.3 Utility Source Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| connected bus | Bus internalId | Yes | select from buses |
+| nominal voltage kV | number | Yes | positive |
+| short circuit level MVA | number | Cond. | either MVA or kA later required |
+| fault current kA | number | Cond. | either MVA or kA later required |
+| X/R ratio | number | No | positive if entered |
+| voltage factor | number | No | positive if entered |
+| frequency Hz | enum | No | default project frequency |
+| status | enum | Yes | in service default |
+
+### 10.4 Generator Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| connected bus | Bus internalId | Yes | |
+| rated MVA | number | No | positive if entered |
+| rated voltage kV | number | No | positive if entered |
+| operating mode | enum | Yes | default `out_of_service` |
+| dispatch MW | number | Cond. | for grid_parallel_pq |
+| dispatch Mvar or PF | number | Cond. | for grid_parallel_pq |
+| voltage setpoint pu | number | Future | disabled or marked provisional |
+| Xd'' pu | number | Future | optional |
+| status | enum | Yes | |
+
+### 10.5 Transformer Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| from bus | Bus internalId | Yes | HV side |
+| to bus | Bus internalId | Yes | LV side |
+| rated power MVA | number | Yes | positive |
+| HV voltage kV | number | Yes | positive |
+| LV voltage kV | number | Yes | positive |
+| impedance %Z | number | Yes | positive |
+| resistance %R | number | No | positive if entered |
+| X/R ratio | number | No | positive if entered |
+| vector group | string | No | e.g. Dyn11 |
+| tap position | number | No | |
+| neutral tap | number | No | |
+| tap step % | number | No | |
+| cooling type | string | No | |
+| loading limit % | number | No | positive if entered |
+| status | enum | Yes | |
+
+### 10.6 Cable Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| from bus | Bus internalId | Yes | |
+| to bus | Bus internalId | Yes | |
+| voltage grade kV | number | No | positive if entered |
+| core configuration | string | No | |
+| conductor material | enum | Yes | Cu/Al/unknown |
+| insulation type | enum | No | |
+| armour type | enum | No | |
+| conductor size mm² | number | No | positive if entered |
+| armour CSA mm² | number | No | positive if entered |
+| length m | number | Yes | positive |
+| R ohm/km | number | No | positive if entered |
+| X ohm/km | number | No | positive if entered |
+| ampacity A | number | No | positive if entered |
+| installation method | enum | No | |
+| ambient temp °C | number | No | |
+| soil resistivity K·m/W | number | Cond. | later required for buried sizing |
+| loaded conductors | number | No | positive integer |
+| status | enum | Yes | |
+
+### 10.7 Breaker / Protective Device Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| device type | enum | Yes | breaker/fuse/relay |
+| from bus | Bus internalId | Yes | |
+| to bus | Bus internalId | Yes | |
+| state | enum | Yes | open/closed |
+| rated voltage kV | number | No | positive if entered |
+| rated current A | number | No | positive if entered |
+| breaking capacity kA | number | No | positive if entered |
+| making capacity kA | number | No | positive if entered |
+| trip unit type | string | No | |
+| clearing time s | number | No | positive if entered |
+| upstream equipment | internalId | No | |
+| downstream equipment | internalId | No | |
+| status | enum | Yes | |
+
+### 10.8 Switch Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| from bus | Bus internalId | Yes | |
+| to bus | Bus internalId | Yes | |
+| state | enum | Yes | open/closed |
+| normal state | enum | No | |
+| rated voltage kV | number | No | positive if entered |
+| rated current A | number | No | positive if entered |
+| status | enum | Yes | |
+
+### 10.9 Load Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| connected bus | Bus internalId | Yes | |
+| load type | enum | Yes | static_load default |
+| kW | number | Yes | positive |
+| kvar | number | No | |
+| power factor | number | Cond. | required if kvar missing later |
+| demand factor | number | No | default 1.0 |
+| status | enum | Yes | |
+
+### 10.10 Motor Form
+
+| Field | Type | Required | Notes |
+|---|---|---:|---|
+| internalId | string | Auto | read-only |
+| tag | string | Yes | |
+| connected bus | Bus internalId | Yes | |
+| rated kW | number | Cond. | kW or HP |
+| rated HP | number | Cond. | kW or HP |
+| rated voltage V | number | Yes | positive |
+| efficiency | number | No | 0 < eff <= 1 |
+| power factor | number | No | 0 < PF <= 1 |
+| FLA A | number | No | positive if entered |
+| FLA source | enum | Yes | calculated default |
+| starting current ratio | number | No | positive if entered |
+| starting PF | number | No | 0 < PF <= 1 |
+| starting method | enum | Yes | DOL default |
+| service factor | number | No | positive if entered |
+| status | enum | Yes | |
+
+
+Motor rating policy:
+
+- `ratedKw` is the Stage 1 source-of-truth power rating when both kW and HP are entered.
+- `ratedHp` is allowed for user convenience and later import/export, but implementation should convert or cross-check it rather than treating both as independent sizing bases.
+- If both values are entered and the implied conversion differs beyond tolerance, raise `W-EQ-004`.
+
+---
+
+## 11. Validation Specification
+
+### 11.1 Validation Output Model
+
+```ts
+export type ValidationSeverity = "error" | "warning" | "info";
+
+export interface ValidationIssue {
+  code: string;
+  severity: ValidationSeverity;
+  message: string;
+  equipmentInternalId?: string;
+  tag?: string;
+  field?: string;
+  path?: string;
+}
+
+export interface ValidationSummary {
+  status: "valid" | "warning" | "error";
+  issues: ValidationIssue[];
+}
+```
+
+### 11.2 Stage 1 Error / Warning Codes
+
+| Code | Severity | Condition | Calculation Allowed Later? |
+|---|---|---|---:|
+| `E-ID-001` | Error | Duplicate internalId | No |
+| `W-ID-001` | Warning | Duplicate tag | Configurable later |
+| `I-NET-001` | Info | Project is empty | N/A |
+| `E-NET-001` | Error | Non-empty electrical model has no in-service source | No |
+| `E-NET-002` | Error | Floating bus exists | No |
+| `E-NET-003` | Error | Equipment references missing bus | No |
+| `E-NET-004` | Error | Diagram edge references missing node | No |
+| `E-NET-005` | Error | Diagram node references missing equipment | No |
+| `W-NET-001` | Warning | Branch-chain endpoints differ from equipment from/to bus | Later calculation may fail |
+| `I-EQ-001` | Info | Draft equipment has missing required field | Not calculation-ready |
+| `E-EQ-001` | Error | Required equipment field missing in calculation-readiness/import validation | No |
+| `E-EQ-002` | Error | Numeric field must be positive | No |
+| `E-EQ-003` | Error | Transformer from/to bus missing or identical | No |
+| `E-EQ-004` | Error | Cable from/to bus missing or identical | No |
+| `E-EQ-005` | Error | Switch/breaker from/to bus missing or identical | No |
+| `E-EQ-006` | Error | Placeholder references missing contained bus | No |
+| `W-EQ-001` | Warning | Optional rating field missing | Yes, but later module may fail |
+| `W-EQ-002` | Warning | Non-3P topology is outside integrated calculation MVP | No for later integrated calculation |
+| `W-EQ-003` | Warning | Transformer `%R` and X/R ratio appear inconsistent | Later calculation may fail |
+| `W-EQ-004` | Warning | Motor kW and HP ratings appear inconsistent | Later calculation may fail |
+| `W-CBL-001` | Warning | Cable R/X manually entered and may override future library-derived values | Yes, but source must be audited later |
+| `W-GEN-001` | Warning | Generator mode is provisional/future for release-gate calculation | No for generator calculation |
+| `I-STG-001` | Info | Calculation module not implemented in Stage 1 | N/A |
+
+### 11.3 Required Validation Functions
+
+```ts
+export function validateProject(project: PowerSystemProjectFile): ValidationSummary;
+export function validateIds(project: PowerSystemProjectFile): ValidationIssue[];
+export function validateTags(project: PowerSystemProjectFile): ValidationIssue[];
+export function validateEquipment(project: PowerSystemProjectFile): ValidationIssue[];
+export function validateDiagram(project: PowerSystemProjectFile): ValidationIssue[];
+export function validateConnectivity(project: PowerSystemProjectFile): ValidationIssue[];
+```
+
+### 11.4 Connectivity Validation Rules
+
+1. A completely empty project raises `I-NET-001`, not `E-NET-001`.
+2. A non-empty electrical model with no in-service utility source raises `E-NET-001`.
+3. Every source must reference an existing bus once its `connectedBus` is entered.
+4. Every load must reference an existing bus once its `connectedBus` is entered.
+5. Every motor must reference an existing bus once its `connectedBus` is entered.
+6. Every transformer must reference two existing, different buses for calculation-readiness.
+7. Every cable must reference two existing, different buses for calculation-readiness.
+8. Every breaker must reference two existing, different buses for calculation-readiness.
+9. Every switch must reference two existing, different buses for calculation-readiness.
+10. Every placeholder `containedBusIds` entry must reference an existing bus.
+11. Every diagram node must reference existing equipment.
+12. Every diagram edge must reference existing diagram nodes.
+13. Every `branchEquipmentInternalIds` item must reference an existing cable, breaker, or switch.
+14. A bus with no connection to any source path is floating after the project contains at least one source and one branch path.
+
+Stage 1 connectivity may treat all closed branches as connected and all open switch/breaker branches as disconnected.
+
+### 11.5 Numeric Validation Rules
+
+| Field Pattern | Rule |
+|---|---|
+| voltage | must be > 0 if required or entered |
+| current | must be > 0 if entered |
+| power | must be > 0 if required or entered |
+| impedance % | must be > 0 if required or entered |
+| length | must be > 0 if required or entered |
+| ampacity | must be > 0 if entered |
+| efficiency | must be > 0 and <= 1 if entered |
+| power factor | must be > 0 and <= 1 if entered |
+| demand factor | must be >= 0 and <= 1, unless project later allows >1 |
+| clearing time | must be > 0 if entered |
+
+
+### 11.6 Cross-Field Validation Rules
+
+| Area | Rule | Issue Code |
+|---|---|---|
+| Transformer | If both `vkrPercent` and `xrRatio` are entered, check whether they are mutually consistent with `vkPercent`. If mismatch exceeds tolerance, warn. | `W-EQ-003` |
+| Cable | If `rOhmPerKm` or `xOhmPerKm` is manually entered, keep it as user input. Future cable-library values must not silently overwrite it. | `W-CBL-001` when source conflict exists |
+| Motor | If both `ratedKw` and `ratedHp` are entered, treat `ratedKw` as the sizing source of truth and warn if HP conversion is inconsistent. | `W-EQ-004` |
+| Generator | If `operatingMode = grid_parallel_pq`, dispatch `pMw` and either `qMvar` or `powerFactor` become calculation-readiness requirements. | `I-EQ-001` in Stage 1, `E-EQ-001` later |
+| Bus topology | Only `3P3W` and `3P4W` are within integrated Power System Study MVP calculation scope. | `W-EQ-002` |
+
+Cable value priority for future Stage 4:
+
+1. Explicit user-entered R/X values with source metadata,
+2. imported/vendor cable data,
+3. project-local cable library data,
+4. default template values only as warning-producing fallback.
+
+Stage 1 does not implement this priority logic fully, but the data model must not prevent it.
+
+---
+
+## 12. Project IO Specification
+
+### 12.1 Save Project
+
+Function:
+
+```ts
+export function serializeProject(project: PowerSystemProjectFile): string;
+export async function saveProjectFile(project: PowerSystemProjectFile): Promise<void>;
+```
+
+Save behavior:
+
+1. Update `project.updatedAt`.
+2. Update `project.lastSavedAt`.
+3. Run validation before save.
+4. Store the latest validation summary in the project file as the saved validation audit reference.
+5. Serialize with deterministic stable key ordering.
+6. Do not remove unknown future fields unless migration policy explicitly allows it.
+
+### 12.2 Load Project
+
+Function:
+
+```ts
+export function parseProjectFile(jsonText: string): PowerSystemProjectFile;
+export function migrateProjectFile(input: unknown): PowerSystemProjectFile;
+```
+
+Load behavior:
+
+1. Parse JSON.
+2. Check `schemaVersion`.
+3. If missing schema version, show warning and attempt migration only if safe.
+4. Validate required top-level keys.
+5. Rebuild derived UI state from project file.
+6. Run fresh validation after load; runtime validation state supersedes the saved validation audit reference.
+7. Do not auto-fix engineering data silently.
+
+### 12.3 Deterministic JSON Policy
+
+Project JSON must be deterministic enough for code review and engineering audit.
+
+Rules:
+
+1. Top-level keys must be serialized in the documented order shown below.
+2. Documented top-level key order: `schemaVersion`, `appVersion`, `project`, `equipment`, `diagram`, `scenarios`, `calculationSnapshots`, `tagCounters`, `validation`.
+3. Equipment collections should be sorted by `internalId` unless the user has explicitly defined a display/order field later.
+4. `internalId` ordering is chosen over tag ordering to minimize diff churn when new equipment is added or tags are edited.
+5. Object keys should be emitted in stable order by a dedicated serializer rather than relying on incidental insertion order.
+6. Save/load/save round-trip should produce no diff except for expected timestamp fields and refreshed saved validation metadata.
+
+### 12.4 Runtime Validator Version Policy
+
+The Stage 1 reference runtime validator is written for **Zod v4**.
+
+Rules:
+
+1. The implementation shall use Zod v4-compatible syntax, including `z.record(z.string(), valueSchema)`.
+2. `package.json` should pin or range-lock Zod to a v4-compatible version to avoid accidental validator drift.
+3. Implementations using Zod v3 must adapt the reference schema syntax explicitly; the Rev D reference schema itself should be treated as Zod v4.
+4. The Zod schema and JSON Schema must be kept in sync for structural rules, especially `branch_chain` vs `connection` edge constraints.
+
+### 12.4A Project Loader Error Reporting Policy
+
+`loadProjectFile(jsonText)` must not silently swallow schema warnings when strict schema validation fails.
+
+The reference return shape is:
+
+```ts
+interface LoadedProjectFile {
+  project?: PowerSystemProjectFile;
+  schemaWarnings: string[];
+  schemaErrors?: string[];
+  savedValidation?: ValidationSummary;
+}
+```
+
+Policy:
+
+1. Invalid JSON returns `schemaErrors`; it does not create a project object.
+2. Unknown top-level keys are reported in `schemaWarnings` before strict schema parsing.
+3. If strict schema parsing fails, the caller still receives both `schemaWarnings` and `schemaErrors`.
+4. Saved validation is returned only when strict parsing succeeds, and remains an audit reference only.
+5. After a successful load, runtime semantic validation must run again and become the authoritative UI validation state.
+
+### 12.5 Import/Export UX
+
+Minimum Stage 1 UX:
+
+- New Project
+- Open JSON
+- Save JSON
+- Save As JSON
+- Show last saved time
+- Show unsaved changes indicator
+
+---
+
+## 13. State Management
+
+Recommended app state shape:
+
+```ts
+export interface AppState {
+  project: PowerSystemProjectFile;
+  selectedEquipmentInternalIds: string[];
+  validation: ValidationSummary;
+  isDirty: boolean;
+  leftPanelTab: "palette" | "projectTree";
+  rightPanelMode: "projectSummary" | "properties" | "multiSelection";
+  bottomPanelTab: "validation" | "warnings" | "errors" | "calculationStatus";
+  calculationStatus: CalculationStatusPlaceholder;
+}
+
+export interface CalculationStatusPlaceholder {
+  loadFlow: "not_implemented" | "disabled_by_validation";
+  voltageDrop: "not_implemented" | "disabled_by_validation";
+  shortCircuit: "not_implemented" | "disabled_by_validation";
+  cableSizing: "not_implemented" | "disabled_by_validation";
+  report: "not_implemented" | "disabled_by_validation";
+}
+```
+
+State rules:
+
+1. All equipment edits update project state.
+2. All project state changes mark `isDirty = true`.
+3. Validation runs after each meaningful edit.
+4. React Flow state is derived from project diagram state.
+5. Do not store separate untracked equipment values inside component state after form submission.
+
+---
+
+## 14. Tag Suggestion Rules
+
+Default prefixes:
+
+| Equipment | Prefix | Example |
+|---|---|---|
+| Utility | `UTL` | `UTL-001` |
+| Generator | `GEN` | `GEN-001` |
+| Bus | `BUS` | `BUS-001` |
+| Transformer | `TR` | `TR-001` |
+| Cable | `CBL` | `CBL-001` |
+| Breaker | `BRK` | `BRK-001` |
+| Switch | `SW` | `SW-001` |
+| Load | `LD` | `LD-001` |
+| Motor | `M` | `M-001` |
+| MCC Placeholder | `MCC` | `MCC-001` |
+| Switchgear Placeholder | `SWGR` | `SWGR-001` |
+
+Function:
+
+```ts
+export function suggestTag(kind: EquipmentKind, project: PowerSystemProjectFile): string;
+export function incrementTagCounter(kind: EquipmentKind, project: PowerSystemProjectFile): PowerSystemProjectFile;
+```
+
+Rule:
+
+- Use `project.tagCounters[prefix]` as a monotonic **auto-suggestion creation counter** for the default equipment-kind prefix.
+- Suggested tag is `PREFIX-${nextCounter.toString().padStart(3, "0")}`.
+- Increment the counter when the equipment is created, before or regardless of later user tag edits.
+- Do not decrement counters when equipment is deleted.
+- Do not reuse deleted numbers unless the user explicitly resets tag numbering in a later feature.
+- User may override tag after creation, including project-specific sub-prefixes such as `BUS-MV-001` or `BUS-LV-001`.
+- User-customized sub-prefix tags are **not** separately tracked by `tagCounters` in Stage 1. Duplicate-tag validation is the safety mechanism for user-edited tags.
+- On import, initialize or repair each default prefix counter to at least `max(existingCounter, canonicalAutoTagMaxSuffix, collectionLengthForKind)`.
+- `canonicalAutoTagMaxSuffix` only considers tags matching the default auto-tag pattern, for example `^BUS-\d+$`. It does not parse user sub-prefixes such as `BUS-MV-001`.
+- This policy intentionally favors simple deterministic default suggestions over attempting to infer every plant-specific tag grammar.
+
+---
+
+## 15. User Flows
+
+### 15.1 Create New Project
+
+1. User clicks New Project.
+2. App opens project setup dialog.
+3. User enters project name and frequency.
+4. App creates empty project file structure.
+5. Validation panel shows `I-NET-001` while the project is completely empty.
+6. After buses/loads/branches are added without an in-service source, validation escalates to `E-NET-001`.
+
+### 15.2 Create Basic One-Line
+
+1. User adds Utility.
+2. User adds MV Bus.
+3. User adds Transformer.
+4. User adds LV Bus.
+5. User adds Cable.
+6. User adds Load or Motor.
+7. User connects elements.
+8. User fills required fields.
+9. Validation panel updates.
+
+### 15.3 Edit Equipment Tag
+
+1. User selects equipment.
+2. User edits `tag` in property panel.
+3. `internalId` remains unchanged.
+4. Diagram label updates.
+5. All internal references remain valid.
+
+### 15.4 Save and Reload
+
+1. User saves project to JSON.
+2. User closes/reloads app.
+3. User opens JSON.
+4. Diagram positions, equipment data, and tags are restored; fresh validation is recomputed after load while saved validation remains available as an audit reference.
+
+---
+
+## 16. Stage 1 Acceptance Criteria
+
+| No. | Acceptance Criteria |
+|---:|---|
+| 1 | User can create a new project. |
+| 2 | User can place Utility, Generator, Bus, Transformer, Cable, Breaker, Switch, Load, Motor, MCC Placeholder, and Switchgear Placeholder. |
+| 3 | User can edit equipment data in a property panel. |
+| 4 | Every equipment item has immutable `internalId` and editable `tag`. |
+| 5 | Editing `tag` does not break references or diagram selection. |
+| 6 | Diagram nodes/edges are linked to equipment data by `internalId`. |
+| 7 | User can save the project as JSON. |
+| 8 | User can reopen saved JSON and recover diagram layout plus equipment data. |
+| 9 | Duplicate internalId is reported as `E-ID-001`. |
+| 10 | Duplicate tag is reported as `W-ID-001` by default. |
+| 11 | Empty project is reported as `I-NET-001`; non-empty model with no in-service source is reported as `E-NET-001`. |
+| 12 | Floating bus is reported as `E-NET-002`. |
+| 13 | Equipment referencing a missing bus is reported as `E-NET-003`. |
+| 14 | Diagram edge referencing a missing node is reported as `E-NET-004`. |
+| 15 | Missing required fields in newly created draft equipment are reported as `I-EQ-001`; calculation-readiness/import validation may report `E-EQ-001`. |
+| 16 | Non-positive required numeric values are reported as `E-EQ-002`. |
+| 17 | Calculation buttons do not execute real calculation in Stage 1. |
+| 18 | Calculation status clearly says calculation modules are not implemented in Stage 1. |
+| 19 | Validation summary is visible in the bottom panel. |
+| 20 | Project JSON uses documented top-level order: `schemaVersion`, `appVersion`, `project`, `equipment`, `diagram`, `scenarios`, `calculationSnapshots`, `tagCounters`, `validation`. |
+| 21 | Transformer is rendered as a diagram node, not as a diagram edge. |
+| 22 | Cable, breaker, and switch can be represented as ordered branch-chain items on a diagram edge. |
+| 23 | Project JSON serialization uses deterministic stable key ordering. |
+
+---
+
+## 17. Implementation Task Breakdown
+
+### Task 1 — Initialize App and Packages
+
+- Create monorepo structure.
+- Configure TypeScript.
+- Configure React app.
+- Install React Flow.
+- Add lint/test/build scripts.
+
+Deliverable:
+
+```text
+App runs with empty layout and package imports working.
+```
+
+### Task 2 — Define Core Model Package
+
+- Implement equipment types.
+- Implement project file model.
+- Implement diagram model, including transformer-as-node and branch-chain edge model.
+- Implement scenario placeholder model.
+- Add reserved `calculationSnapshots` and `tagCounters` fields.
+- Export all types from `packages/core-model`.
+
+Deliverable:
+
+```text
+Core TypeScript model compiles without UI dependency.
+```
+
+### Task 3 — Implement ID and Tag Utilities
+
+- Implement `createInternalId(kind)`.
+- Implement `suggestTag(kind, project)`.
+- Implement monotonic `tagCounters`.
+- Implement equipment collection helpers.
+
+Deliverable:
+
+```text
+New equipment gets stable internalId and suggested tag.
+```
+
+### Task 4 — Build Project State Store
+
+- Create app state.
+- Implement new project action.
+- Implement add/update/delete equipment actions.
+- Implement select equipment action.
+- Implement dirty state.
+
+Deliverable:
+
+```text
+Equipment can be created and edited in memory.
+```
+
+### Task 5 — Build Main Layout
+
+- Left panel.
+- Center diagram canvas.
+- Right property panel.
+- Bottom validation panel.
+
+Deliverable:
+
+```text
+User can navigate the Stage 1 UI skeleton.
+```
+
+### Task 6 — Implement Equipment Palette
+
+- Palette item list.
+- Create equipment on click/drag.
+- Add diagram node or branch placeholder.
+- Select created equipment.
+
+Deliverable:
+
+```text
+User can add all Stage 1 equipment kinds.
+```
+
+### Task 7 — Implement React Flow Diagram
+
+- Render diagram nodes.
+- Render diagram edges and branch-chain labels.
+- Render transformer as a node.
+- Support pan/zoom/move/select/delete.
+- Display tag labels.
+- Sync node position to project diagram model.
+
+Deliverable:
+
+```text
+Diagram is editable and persists layout data.
+```
+
+### Task 8 — Implement Property Forms
+
+- Project form.
+- Bus form.
+- Utility form.
+- Generator form.
+- Transformer form.
+- Cable form.
+- Breaker/protective device form.
+- Switch form.
+- Load form.
+- Motor form.
+- Placeholder form.
+
+Deliverable:
+
+```text
+Selected equipment can be edited through type-specific forms.
+```
+
+### Task 9 — Implement Validation Package
+
+- ID validation.
+- Tag validation.
+- Draft incomplete-field validation using `I-EQ-001`.
+- Calculation-readiness required-field validation using `E-EQ-001`.
+- Numeric validation.
+- Connectivity validation.
+- Diagram reference validation.
+
+Deliverable:
+
+```text
+Validation summary updates after edits.
+```
+
+### Task 10 — Implement Validation Panel
+
+- Group by severity.
+- Filter errors/warnings/info.
+- Click issue to select equipment.
+- Show code, message, tag, field.
+
+Deliverable:
+
+```text
+User can understand and navigate validation issues.
+```
+
+### Task 11 — Implement Project Save/Load
+
+- Serialize JSON with deterministic stable key ordering.
+- Open JSON.
+- Restore state.
+- Restore diagram layout.
+- Run validation after load.
+
+Deliverable:
+
+```text
+User can round-trip project JSON without losing data.
+```
+
+### Task 12 — Implement Calculation Placeholder
+
+- Add disabled calculation actions.
+- Show not implemented status.
+- Prevent fake results.
+
+Deliverable:
+
+```text
+Stage 1 does not produce invalid-looking calculation output.
+```
+
+### Task 13 — Stage 1 Test Set
+
+Minimum tests:
+
+- New project schema test.
+- Add equipment test.
+- internalId uniqueness test.
+- tag edit does not change internalId test.
+- duplicate internalId validation test.
+- duplicate tag warning test.
+- missing bus reference validation test.
+- save/load round-trip test.
+- diagram node references equipment test.
+- calculation placeholder disabled test.
+
+Deliverable:
+
+```text
+Stage 1 test suite passes in CI/local build.
+```
+
+---
+
+## 18. Suggested Cursor / Codex Implementation Prompt
+
+```text
+Implement Stage 1 One-Line Diagram MVP for the Power System Study App.
+
+Use the Stage 1 Implementation Spec as the source of truth.
+
+Do not implement load flow, voltage drop, short circuit, cable sizing, equipment duty check, or report generation yet.
+
+Focus on:
+- React + TypeScript web app
+- React Flow one-line diagram canvas
+- equipment palette
+- project tree
+- equipment property panel
+- project JSON save/load
+- internalId/tag separation
+- basic validation
+- warning/error panel
+- calculation status placeholder
+
+Required rules:
+- Project data is the source of truth, not React Flow node data.
+- Equipment internalId is immutable and used for references.
+- User-visible tag is editable.
+- Transformer must be rendered as a diagram node, not as an edge.
+- Cable, breaker, and switch branch chains must be ordered on diagram edges.
+- Diagram nodes/edges must reference equipment by internalId.
+- New blank equipment should show incomplete info (`I-EQ-001`) rather than immediate required-field errors.
+- Save/load must round-trip the full project JSON with deterministic key ordering.
+- Validation must return code-based issues.
+- Calculation buttons must not produce fake or placeholder calculation results.
+```
+
+---
+
+## 19. Stage 1 Completion Definition
+
+Stage 1 is complete when the user can create a small MV/LV one-line project, enter equipment data, save it as JSON, reload it, and see all structural validation issues clearly, without running any real electrical calculation.
+
+A representative Stage 1 demo case should include:
+
+```text
+Utility UTL-001
+  -> MV Bus BUS-MV-001
+  -> Transformer node TR-001
+  -> LV Bus BUS-LV-001
+  -> Branch chain [Breaker BRK-001, Cable CBL-001]
+  -> Motor Terminal Bus BUS-MTR-001
+  -> Motor M-001
+```
+
+The saved JSON must preserve:
+
+- project metadata
+- all equipment objects
+- internalId/tag separation
+- diagram layout
+- equipment connectivity
+- saved validation summary as an audit reference
+- empty or default scenario structure
+
+---
+
+## 20. Handoff to Stage 2
+
+Stage 2 may begin only after Stage 1 provides stable outputs for:
+
+1. project JSON schema,
+2. bus/source/transformer/cable/load/motor/breaker data,
+3. node-edge connectivity including transformer nodes and branch-chain edges,
+4. validation result model,
+5. save/load round-trip,
+6. clear calculation placeholder behavior.
+
+Stage 2 will then add:
+
+- app standard network model conversion,
+- Load Flow adapter input preparation,
+- Voltage Drop input preparation,
+- first GC-LF and GC-VD test cases.
+
+
+---
+
+## 21. Revision Notes
+
+| Revision | Date | Description |
+|---|---|---|
+| Draft | 2026-05-01 | Initial Stage 1 implementation-ready draft. |
+| Rev A | 2026-05-01 | Incorporated Stage 1 review: transformer rendered as node, branch-chain edge model, draft/incomplete validation policy, empty project info state, topology simplification, monotonic tag counters, deterministic JSON serialization, reserved calculation snapshot field, and additional cross-field validation rules. |
+| Rev B | 2026-05-01 | Final pre-implementation cleanup: clarified saved validation vs fresh runtime validation, removed Stage 1 calculation result storage, defined connection edge semantics, centralized top-level JSON key order, and documented internalId-based ordering rationale. |
+| Rev C | 2026-05-01 | Supporting-artifact review cleanup: clarified tag counter semantics for user-customized tags, required schema rejection of branch-chain fields on connection edges, documented runtime validator version policy, and preserved Rev B implementation baseline. |
+| Rev D | 2026-05-01 | Final pre-implementation cleanup: `loadProjectFile` returns schema warnings and schema errors together, Zod reference policy is v4-specific, and first PR boundaries are clarified. |

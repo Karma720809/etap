@@ -1,0 +1,29 @@
+{
+  "name": "@power-system-study/fixtures",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./demo": "./src/stage_1_demo_fixture.json"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "build": "tsc -b",
+    "check": "tsx check-fixtures.ts"
+  },
+  "dependencies": {
+    "@power-system-study/schemas": "workspace:*",
+    "@power-system-study/validation": "workspace:*"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

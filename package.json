@@ -1,0 +1,22 @@
+{
+  "name": "power-system-study",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "typecheck": "tsc -b",
+    "test": "pnpm -r run test",
+    "build": "tsc -b",
+    "check:fixtures": "pnpm --filter @power-system-study/fixtures run check",
+    "check:acceptance": "tsx scripts/check-acceptance.ts",
+    "lint": "echo 'lint deferred to a later PR'",
+    "clean": "tsc -b --clean && rm -rf node_modules .turbo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

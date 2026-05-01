@@ -1,0 +1,221 @@
+{
+  "caseId": "GC-SC-01",
+  "module": "short-circuit",
+  "title": "Utility + Transformer LV Bus 3-phase Fault",
+  "description": "Hand calculation benchmark for 3-phase bolted short-circuit current at the LV bus of a 2.0 MVA 6.6/0.4 kV transformer supplied by a finite utility source.",
+  "standard": "IEC",
+  "referenceType": "hand_calculation",
+  "referenceStatus": "verified",
+  "referenceSource": "internal_hand_calculation_gc_sc_01.md",
+  "schemaVersion": "1.0.0",
+  "appVersion": "1.0.0",
+  "calculationEngineVersion": "1.0.0",
+  "adapterVersion": "1.0.0",
+  "tolerance": {
+    "ikssKA": "±1%",
+    "ipKA": "±2%",
+    "xOverR": "±5%",
+    "status": "exact match",
+    "warningCodes": "exact match",
+    "errorCodes": "exact match"
+  },
+  "input": {
+    "inputModel": "stage1_canonical_project_file",
+    "projectFile": {
+      "schemaVersion": "1.0.0",
+      "appVersion": "1.0.0",
+      "project": {
+        "projectId": "PJT-GC-SC-01",
+        "projectName": "GC-SC-01 Utility Transformer LV Fault",
+        "standard": "IEC",
+        "frequencyHz": 60,
+        "createdAt": "2026-05-01T00:00:00+09:00",
+        "updatedAt": "2026-05-01T00:00:00+09:00"
+      },
+      "equipment": {
+        "utilities": [
+          {
+            "internalId": "eq_util_001",
+            "tag": "UTL-001",
+            "kind": "utility",
+            "name": "Utility Source",
+            "createdAt": "2026-05-01T00:00:00+09:00",
+            "updatedAt": "2026-05-01T00:00:00+09:00",
+            "connectedBus": "eq_bus_mv_001",
+            "vnKv": 6.6,
+            "scLevelMva": 250.0,
+            "faultCurrentKa": null,
+            "xrRatio": 10.0,
+            "voltageFactor": 1.0,
+            "frequencyHz": 60,
+            "status": "in_service"
+          }
+        ],
+        "generators": [],
+        "buses": [
+          {
+            "internalId": "eq_bus_mv_001",
+            "tag": "BUS-MV-001",
+            "kind": "bus",
+            "name": "6.6 kV Bus",
+            "createdAt": "2026-05-01T00:00:00+09:00",
+            "updatedAt": "2026-05-01T00:00:00+09:00",
+            "vnKv": 6.6,
+            "voltageType": "AC",
+            "topology": "3P3W",
+            "minVoltagePct": 95,
+            "maxVoltagePct": 105,
+            "grounding": "resistance"
+          },
+          {
+            "internalId": "eq_bus_lv_001",
+            "tag": "BUS-LV-001",
+            "kind": "bus",
+            "name": "0.4 kV LV Bus",
+            "createdAt": "2026-05-01T00:00:00+09:00",
+            "updatedAt": "2026-05-01T00:00:00+09:00",
+            "vnKv": 0.4,
+            "voltageType": "AC",
+            "topology": "3P4W",
+            "minVoltagePct": 95,
+            "maxVoltagePct": 105,
+            "grounding": "TN-S"
+          }
+        ],
+        "transformers": [
+          {
+            "internalId": "eq_tr_001",
+            "tag": "TR-001",
+            "kind": "transformer",
+            "name": "2.0 MVA Transformer",
+            "createdAt": "2026-05-01T00:00:00+09:00",
+            "updatedAt": "2026-05-01T00:00:00+09:00",
+            "fromBus": "eq_bus_mv_001",
+            "toBus": "eq_bus_lv_001",
+            "snMva": 2.0,
+            "vnHvKv": 6.6,
+            "vnLvKv": 0.4,
+            "vkPercent": 6.0,
+            "vkrPercent": 1.0,
+            "xrRatio": null,
+            "vectorGroup": "Dyn11",
+            "tapPosition": null,
+            "tapStepPercent": null,
+            "coolingType": null,
+            "loadingLimitPct": 100,
+            "status": "in_service"
+          }
+        ],
+        "cables": [],
+        "breakers": [],
+        "switches": [],
+        "loads": [],
+        "motors": [],
+        "placeholders": []
+      },
+      "diagram": {
+        "nodes": [
+          {
+            "id": "node_util_001",
+            "equipmentInternalId": "eq_util_001",
+            "kind": "utility",
+            "position": {
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "id": "node_bus_mv_001",
+            "equipmentInternalId": "eq_bus_mv_001",
+            "kind": "bus",
+            "position": {
+              "x": 180,
+              "y": 0
+            }
+          },
+          {
+            "id": "node_tr_001",
+            "equipmentInternalId": "eq_tr_001",
+            "kind": "transformer",
+            "position": {
+              "x": 360,
+              "y": 0
+            }
+          },
+          {
+            "id": "node_bus_lv_001",
+            "equipmentInternalId": "eq_bus_lv_001",
+            "kind": "bus",
+            "position": {
+              "x": 540,
+              "y": 0
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "edge_util_to_mv",
+            "fromNodeId": "node_util_001",
+            "toNodeId": "node_bus_mv_001",
+            "kind": "connection"
+          },
+          {
+            "id": "edge_mv_to_tr",
+            "fromNodeId": "node_bus_mv_001",
+            "toNodeId": "node_tr_001",
+            "kind": "connection"
+          },
+          {
+            "id": "edge_tr_to_lv",
+            "fromNodeId": "node_tr_001",
+            "toNodeId": "node_bus_lv_001",
+            "kind": "connection"
+          }
+        ],
+        "viewport": {
+          "x": 0,
+          "y": 0,
+          "zoom": 1
+        }
+      },
+      "scenarios": [],
+      "calculationSnapshots": [],
+      "tagCounters": {
+        "UTL": 1,
+        "BUS": 2,
+        "TR": 1
+      },
+      "validation": {
+        "status": "valid",
+        "issues": []
+      }
+    },
+    "fault": {
+      "locationInternalId": "eq_bus_lv_001",
+      "locationTag": "BUS-LV-001",
+      "type": "3phase_bolted"
+    },
+    "solverOptions": {
+      "shortCircuitStandard": "iec60909_simplified",
+      "voltageFactorC": 1.0,
+      "applyKt": false,
+      "applyKg": false,
+      "motorContributionMode": "excluded",
+      "generatorContributionMode": "excluded"
+    }
+  },
+  "expected": {
+    "ikssKA": 42.46,
+    "ipKA": 97.55,
+    "xOverR": 6.22,
+    "status": "pass",
+    "warningCodes": [],
+    "errorCodes": []
+  },
+  "audit": {
+    "preparedBy": "Power System Study App PRD support artifact",
+    "reviewedBy": "TBD",
+    "preparedAt": "2026-05-01",
+    "notes": "Expected values are from documented hand calculation. Input is expressed as a Stage 1 canonical project file plus short-circuit fault options. Engineering review is still required before release-gate enforcement."
+  }
+}
