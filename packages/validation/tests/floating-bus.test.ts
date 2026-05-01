@@ -118,6 +118,148 @@ describe("E-NET-002 floating bus", () => {
     expect(floating.map((i) => i.equipmentInternalId)).toContain("eq_bus_mtr");
   });
 
+  it("fires E-NET-002 when an in-service utility has connectedBus=null while branch paths exist (detached source)", () => {
+    // The blocker Codex flagged: previously the validator returned [] whenever no
+    // in-service source was attached to a valid bus, so E-NET-001 (status-only) and
+    // E-NET-002 (reachability) BOTH stayed silent on a detached source.
+    const project = emptyProject();
+    project.equipment.buses.push(bus("eq_bus_a", "BUS-A"), bus("eq_bus_b", "BUS-B"));
+    project.equipment.utilities.push({
+      internalId: "eq_util_1",
+      tag: "UTL-001",
+      kind: "utility",
+      createdAt: NOW,
+      updatedAt: NOW,
+      connectedBus: null,
+      vnKv: 6.6,
+      status: "in_service",
+    });
+    project.equipment.cables.push({
+      internalId: "eq_cbl_1",
+      tag: "CBL-001",
+      kind: "cable",
+      createdAt: NOW,
+      updatedAt: NOW,
+      fromBus: "eq_bus_a",
+      toBus: "eq_bus_b",
+      voltageGradeKv: 0.6,
+      conductorMaterial: "Cu",
+      conductorSizeMm2: 25,
+      lengthM: 30,
+      status: "in_service",
+    });
+
+    const result = validateProject(project);
+    const floating = result.issues.filter((i) => i.code === "E-NET-002");
+    expect(floating.map((i) => i.equipmentInternalId).sort()).toEqual(["eq_bus_a", "eq_bus_b"]);
+  });
+
+  it("fires E-NET-002 when an in-service generator has connectedBus=null while branch paths exist", () => {
+    const project = emptyProject();
+    project.equipment.buses.push(bus("eq_bus_a", "BUS-A"), bus("eq_bus_b", "BUS-B"));
+    project.equipment.generators.push({
+      internalId: "eq_gen_1",
+      tag: "GEN-001",
+      kind: "generator",
+      createdAt: NOW,
+      updatedAt: NOW,
+      connectedBus: null,
+      ratedMva: 1,
+      ratedVoltageKv: 0.4,
+      operatingMode: "grid_parallel_pq",
+      status: "in_service",
+    });
+    project.equipment.cables.push({
+      internalId: "eq_cbl_1",
+      tag: "CBL-001",
+      kind: "cable",
+      createdAt: NOW,
+      updatedAt: NOW,
+      fromBus: "eq_bus_a",
+      toBus: "eq_bus_b",
+      voltageGradeKv: 0.6,
+      conductorMaterial: "Cu",
+      conductorSizeMm2: 25,
+      lengthM: 30,
+      status: "in_service",
+    });
+
+    const result = validateProject(project);
+    const floating = result.issues.filter((i) => i.code === "E-NET-002");
+    expect(floating.map((i) => i.equipmentInternalId).sort()).toEqual(["eq_bus_a", "eq_bus_b"]);
+  });
+
+  it("an out-of-service transformer breaks the path so the downstream bus floats", () => {
+    const project = emptyProject();
+    project.equipment.buses.push(bus("eq_bus_mv", "BUS-MV"), bus("eq_bus_lv", "BUS-LV"));
+    project.equipment.utilities.push(utility("eq_util_1", "UTL-001", "eq_bus_mv"));
+    project.equipment.transformers.push({
+      internalId: "eq_tr_1",
+      tag: "TR-001",
+      kind: "transformer",
+      createdAt: NOW,
+      updatedAt: NOW,
+      fromBus: "eq_bus_mv",
+      toBus: "eq_bus_lv",
+      snMva: 1,
+      vnHvKv: 6.6,
+      vnLvKv: 0.4,
+      vkPercent: 6,
+      status: "out_of_service",
+    });
+
+    const result = validateProject(project);
+    const floating = result.issues.filter((i) => i.code === "E-NET-002");
+    expect(floating.map((i) => i.equipmentInternalId)).toEqual(["eq_bus_lv"]);
+  });
+
+  it("an out-of-service cable breaks the path so the downstream bus floats", () => {
+    const project = emptyProject();
+    project.equipment.buses.push(bus("eq_bus_a", "BUS-A"), bus("eq_bus_b", "BUS-B"));
+    project.equipment.utilities.push(utility("eq_util_1", "UTL-001", "eq_bus_a"));
+    project.equipment.cables.push({
+      internalId: "eq_cbl_1",
+      tag: "CBL-001",
+      kind: "cable",
+      createdAt: NOW,
+      updatedAt: NOW,
+      fromBus: "eq_bus_a",
+      toBus: "eq_bus_b",
+      voltageGradeKv: 0.6,
+      conductorMaterial: "Cu",
+      conductorSizeMm2: 25,
+      lengthM: 30,
+      status: "out_of_service",
+    });
+
+    const result = validateProject(project);
+    const floating = result.issues.filter((i) => i.code === "E-NET-002");
+    expect(floating.map((i) => i.equipmentInternalId)).toEqual(["eq_bus_b"]);
+  });
+
+  it("an out-of-service switch (even if closed) breaks the path so the downstream bus floats", () => {
+    const project = emptyProject();
+    project.equipment.buses.push(bus("eq_bus_a", "BUS-A"), bus("eq_bus_b", "BUS-B"));
+    project.equipment.utilities.push(utility("eq_util_1", "UTL-001", "eq_bus_a"));
+    project.equipment.switches.push({
+      internalId: "eq_sw_1",
+      tag: "SW-001",
+      kind: "switch",
+      createdAt: NOW,
+      updatedAt: NOW,
+      fromBus: "eq_bus_a",
+      toBus: "eq_bus_b",
+      state: "closed",
+      ratedVoltageKv: 0.4,
+      ratedCurrentA: 100,
+      status: "out_of_service",
+    });
+
+    const result = validateProject(project);
+    const floating = result.issues.filter((i) => i.code === "E-NET-002");
+    expect(floating.map((i) => i.equipmentInternalId)).toEqual(["eq_bus_b"]);
+  });
+
   it("a closed breaker on the same path does NOT cause floating", () => {
     const project = emptyProject();
     project.equipment.buses.push(bus("eq_bus_lv", "BUS-LV"), bus("eq_bus_mtr", "BUS-MTR"));

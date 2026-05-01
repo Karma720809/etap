@@ -13,12 +13,22 @@ import { makeIssue } from "./issue.js";
 //   - transformer / cable: traversable iff status === "in_service"
 //   - breaker / switch:    traversable iff status === "in_service" AND state === "closed"
 //
-// The check is skipped when the project has no in-service source — E-NET-001 already
-// covers that case — and when there are no branch elements connecting buses, since
-// the spec only requires the floating-bus check after at least one branch path exists.
+// Source policy:
+//   - "in-service source exists" is decided purely by status; an in-service utility/generator
+//     with connectedBus === null still counts as a present source.
+//   - "in-service source attached to a valid bus" gates BFS reachability.
+//   - When a source exists but is detached from any valid bus and the project has at least
+//     one branch path, every bus is unreachable, so every bus is reported as floating.
+//   - When no in-service source exists at all, this validator stays silent so it does not
+//     duplicate E-NET-001 (source-missing).
 export function validateFloatingBus(project: PowerSystemProjectFile): BuiltValidationIssue[] {
   const buses = project.equipment.buses;
   if (buses.length === 0) return [];
+
+  const hasInServiceSource =
+    project.equipment.utilities.some((u) => u.status === "in_service") ||
+    project.equipment.generators.some((g) => g.status === "in_service");
+  if (!hasInServiceSource) return [];
 
   const busIds = new Set(buses.map((b) => b.internalId));
 
@@ -31,7 +41,6 @@ export function validateFloatingBus(project: PowerSystemProjectFile): BuiltValid
     if (g.status !== "in_service") continue;
     if (g.connectedBus && busIds.has(g.connectedBus)) sourceAttachedBuses.add(g.connectedBus);
   }
-  if (sourceAttachedBuses.size === 0) return [];
 
   const adjacency = new Map<string, Set<string>>();
   for (const id of busIds) adjacency.set(id, new Set<string>());
@@ -44,8 +53,9 @@ export function validateFloatingBus(project: PowerSystemProjectFile): BuiltValid
 
   // The spec requires "at least one branch path exists" before E-NET-002 applies.
   // We count any branch entity that has both endpoints assigned, regardless of state,
-  // so that an open breaker counts as an attempted branch path. Only in-service AND
-  // closed branches actually link buses for reachability.
+  // so that an open breaker or out-of-service cable counts as an attempted branch path.
+  // Only in-service (and, for breaker/switch, closed) branches actually link buses for
+  // reachability — out-of-service branches deliberately break connectivity downstream.
   let branchCount = 0;
   for (const t of project.equipment.transformers) {
     if (!t.fromBus || !t.toBus || t.fromBus === t.toBus) continue;
@@ -87,6 +97,11 @@ export function validateFloatingBus(project: PowerSystemProjectFile): BuiltValid
   }
 
   const issues: BuiltValidationIssue[] = [];
+  // When sourceAttachedBuses is empty but a source exists, `reachable` stays empty and
+  // every bus is correctly reported as floating below. This is the case Codex flagged:
+  // an in-service utility/generator with connectedBus = null leaves the model with no
+  // source-path error from E-NET-001 (status-only) and no E-NET-002 from the prior
+  // early-return guard. The detached-source case now flows through the same loop.
   for (const bus of buses) {
     if (!reachable.has(bus.internalId)) {
       issues.push(makeIssue({
