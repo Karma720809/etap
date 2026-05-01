@@ -1,7 +1,19 @@
 import { useMemo } from "react";
 import type { PowerSystemProjectFile } from "@power-system-study/schemas";
 import { useProjectState } from "../state/projectStore.js";
-import { BusForm, GeneratorForm, GenericPlaceholderForm, MotorForm, TransformerForm, UtilityForm } from "./forms/Forms.js";
+import {
+  BreakerForm,
+  BusForm,
+  CableForm,
+  GeneratorForm,
+  GenericPlaceholderForm,
+  LoadForm,
+  MotorForm,
+  PlaceholderForm,
+  SwitchForm,
+  TransformerForm,
+  UtilityForm,
+} from "./forms/Forms.js";
 
 const styles = {
   wrapper: { display: "flex", flexDirection: "column" as const, gap: 12 },
@@ -71,6 +83,22 @@ export function PropertyPanel() {
       break;
     case "generator":
       body = <GeneratorForm value={equipment} buses={buses} onPatch={onPatch} />;
+      break;
+    case "cable":
+      body = <CableForm value={equipment} buses={buses} onPatch={onPatch} />;
+      break;
+    case "breaker":
+      body = <BreakerForm value={equipment} buses={buses} onPatch={onPatch} />;
+      break;
+    case "switch":
+      body = <SwitchForm value={equipment} buses={buses} onPatch={onPatch} />;
+      break;
+    case "load":
+      body = <LoadForm value={equipment} buses={buses} onPatch={onPatch} />;
+      break;
+    case "mcc_placeholder":
+    case "switchgear_placeholder":
+      body = <PlaceholderForm value={equipment} onPatch={onPatch} />;
       break;
     default:
       body = <GenericPlaceholderForm value={equipment} onPatch={onPatch} />;

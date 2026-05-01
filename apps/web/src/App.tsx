@@ -1,11 +1,14 @@
-import { useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { getDemoFixture } from "@power-system-study/fixtures";
 import { loadProjectFile, serializeProjectFile } from "@power-system-study/project-io";
+import { validateProject } from "@power-system-study/validation";
 import { ProjectProvider, useProjectState } from "./state/projectStore.js";
 import { EquipmentPalette } from "./components/EquipmentPalette.js";
+import { ProjectTree } from "./components/ProjectTree.js";
 import { PropertyPanel } from "./components/PropertyPanel.js";
 import { DiagramCanvas } from "./components/DiagramCanvas.js";
 import { ValidationPanel } from "./components/ValidationPanel.js";
+import { CalculationStatusPanel } from "./components/CalculationStatusPanel.js";
 
 const fontStack =
   "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
@@ -16,8 +19,8 @@ const styles = {
     color: "#0d1421",
     height: "100vh",
     display: "grid",
-    gridTemplateColumns: "240px 1fr 340px",
-    gridTemplateRows: "auto 1fr 220px",
+    gridTemplateColumns: "260px 1fr 360px",
+    gridTemplateRows: "auto 1fr 260px",
     gap: 8,
     padding: 8,
     boxSizing: "border-box" as const,
@@ -34,13 +37,54 @@ const styles = {
     background: "#f8fafc",
     flexWrap: "wrap" as const,
   },
-  panel: { border: "1px solid #d8dee5", borderRadius: 6, padding: 12, overflow: "auto" as const, minHeight: 0 },
+  panel: {
+    border: "1px solid #d8dee5",
+    borderRadius: 6,
+    padding: 0,
+    overflow: "hidden" as const,
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+  },
+  rightPanel: {
+    border: "1px solid #d8dee5",
+    borderRadius: 6,
+    padding: 12,
+    overflow: "auto" as const,
+    minHeight: 0,
+  },
+  panelTabs: { display: "flex", borderBottom: "1px solid #e2e8f0" },
+  panelBody: { padding: 12, overflow: "auto" as const, flex: 1, minHeight: 0 },
   canvas: { border: "1px solid #d8dee5", borderRadius: 6, overflow: "hidden" as const, minHeight: 0 },
-  bottom: { gridColumn: "1 / span 3", border: "1px solid #d8dee5", borderRadius: 6, padding: 12, overflow: "auto" as const },
+  bottom: {
+    gridColumn: "1 / span 3",
+    border: "1px solid #d8dee5",
+    borderRadius: 6,
+    overflow: "hidden" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+    minHeight: 0,
+  },
   button: { padding: "6px 12px", borderRadius: 4, border: "1px solid #2563eb", background: "white", color: "#2563eb", cursor: "pointer", fontSize: 13, fontWeight: 600 },
   buttonPrimary: { padding: "6px 12px", borderRadius: 4, border: "1px solid #2563eb", background: "#2563eb", color: "white", cursor: "pointer", fontSize: 13, fontWeight: 600 },
   small: { fontSize: 12, color: "#5f6c7b" },
+  tabButton: (active: boolean) => ({
+    flex: 1,
+    padding: "6px 10px",
+    border: "none",
+    borderBottom: active ? "2px solid #2563eb" : "2px solid transparent",
+    background: active ? "white" : "#f1f5f9",
+    color: active ? "#1d4ed8" : "#475569",
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 600,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.5,
+  }),
 };
+
+type LeftTab = "palette" | "projectTree";
+type BottomTab = "validation" | "calculationStatus";
 
 function Toolbar() {
   const { state, dispatch } = useProjectState();
@@ -65,6 +109,10 @@ function Toolbar() {
     const result = loadProjectFile(text);
     if (result.project) {
       dispatch({ type: "replaceProject", project: result.project });
+      const warnings = result.schemaWarnings ?? [];
+      if (warnings.length > 0) {
+        window.alert(`Loaded with ${warnings.length} schema warning(s):\n${warnings.join("\n")}`);
+      }
     } else {
       const errs = (result.schemaErrors ?? []).join("\n");
       window.alert(`Failed to load project:\n${errs}`);
@@ -104,22 +152,90 @@ function Toolbar() {
   );
 }
 
+function LeftPanel() {
+  const [tab, setTab] = useState<LeftTab>("palette");
+  return (
+    <div style={styles.panel}>
+      <div style={styles.panelTabs} role="tablist" aria-label="Left sidebar">
+        <button
+          type="button"
+          style={styles.tabButton(tab === "palette")}
+          onClick={() => setTab("palette")}
+          role="tab"
+          aria-selected={tab === "palette"}
+          data-testid="left-tab-palette"
+        >
+          Palette
+        </button>
+        <button
+          type="button"
+          style={styles.tabButton(tab === "projectTree")}
+          onClick={() => setTab("projectTree")}
+          role="tab"
+          aria-selected={tab === "projectTree"}
+          data-testid="left-tab-tree"
+        >
+          Project Tree
+        </button>
+      </div>
+      <div style={styles.panelBody}>
+        {tab === "palette" ? <EquipmentPalette /> : <ProjectTree />}
+      </div>
+    </div>
+  );
+}
+
+function BottomPanel() {
+  const { state } = useProjectState();
+  const validation = useMemo(() => validateProject(state.project), [state.project]);
+  const [tab, setTab] = useState<BottomTab>("validation");
+  return (
+    <div style={styles.bottom}>
+      <div style={styles.panelTabs} role="tablist" aria-label="Bottom panel">
+        <button
+          type="button"
+          style={styles.tabButton(tab === "validation")}
+          onClick={() => setTab("validation")}
+          role="tab"
+          aria-selected={tab === "validation"}
+          data-testid="bottom-tab-validation"
+        >
+          Validation ({validation.issues.length})
+        </button>
+        <button
+          type="button"
+          style={styles.tabButton(tab === "calculationStatus")}
+          onClick={() => setTab("calculationStatus")}
+          role="tab"
+          aria-selected={tab === "calculationStatus"}
+          data-testid="bottom-tab-calculation"
+        >
+          Calculation Status
+        </button>
+      </div>
+      <div style={styles.panelBody}>
+        {tab === "validation" ? (
+          <ValidationPanel />
+        ) : (
+          <CalculationStatusPanel validation={validation} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EditorLayout() {
   return (
     <div style={styles.shell}>
       <Toolbar />
-      <div style={styles.panel}>
-        <EquipmentPalette />
-      </div>
+      <LeftPanel />
       <div style={styles.canvas}>
         <DiagramCanvas />
       </div>
-      <div style={styles.panel}>
+      <div style={styles.rightPanel}>
         <PropertyPanel />
       </div>
-      <div style={styles.bottom}>
-        <ValidationPanel />
-      </div>
+      <BottomPanel />
     </div>
   );
 }

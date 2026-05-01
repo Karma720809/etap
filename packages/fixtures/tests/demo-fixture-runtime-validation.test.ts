@@ -3,14 +3,18 @@ import { validateProject } from "@power-system-study/validation";
 import { getDemoFixture } from "../src/index.js";
 
 describe("demo fixture — runtime validation", () => {
-  it("passes runtime validation with status='valid' (no errors, no warnings)", () => {
+  it("passes runtime validation with no errors", () => {
     const fixture = getDemoFixture();
     const result = validateProject(fixture);
-    if (result.status !== "valid") {
+    if (result.status === "error") {
       // eslint-disable-next-line no-console
       console.error("Demo fixture runtime validation issues:", result.issues);
     }
-    expect(result.issues).toEqual([]);
-    expect(result.status).toBe("valid");
+    // The demo cable has manually entered rOhmPerKm/xOhmPerKm to demonstrate a
+    // realistic feeder, so PR #3's W-CBL-001 audit hint is expected here. Any
+    // other warning/error would indicate a regression.
+    const unexpected = result.issues.filter((i) => i.code !== "W-CBL-001");
+    expect(unexpected).toEqual([]);
+    expect(result.status).not.toBe("error");
   });
 });
