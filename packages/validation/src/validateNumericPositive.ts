@@ -9,11 +9,12 @@ import { makeIssue } from "./issue.js";
 // - A non-null value <= 0 fires E-EQ-002.
 // - We only check fields where the spec §11.5 says "must be > 0 if entered".
 //   Range-bounded fields (efficiency, powerFactor, demandFactor, motor service factor)
-//   follow distinct upper/lower-bound rules and are NOT handled here in PR #2.
+//   follow distinct upper/lower-bound rules and are NOT handled here.
 //
-// TODO (PR #3): add range validation for efficiency / powerFactor / starting PF
-// (must be > 0 AND ≤ 1) and demandFactor (≥ 0, ≤ 1) — distinct codes are not yet
-// allocated in the Rev D code table; needs a spec decision before implementation.
+// Future spec decision (post-PR #3): add range validation for efficiency / powerFactor /
+// starting PF (must be > 0 AND ≤ 1) and demandFactor (≥ 0, ≤ 1). The Rev D code table
+// does not yet allocate distinct codes for these, so the rule is intentionally deferred
+// until the spec assigns them.
 function emitIfNonPositive(
   out: BuiltValidationIssue[],
   internalId: string,

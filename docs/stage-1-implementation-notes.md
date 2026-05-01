@@ -93,14 +93,14 @@ Top-level key order (enforced by canonical):
 | `E-NET-004` | ✓ | Diagram edge references missing node id |
 | `E-NET-005` | ✓ | Diagram node references missing equipment internalId |
 | `I-EQ-001` | ✓ | Draft equipment has missing required field |
-| `E-EQ-001` | — | Calculation-readiness/import escalation — deferred to PR #3 |
+| `E-EQ-001` | ✓ (PR #3) | Calculation-readiness/import escalation via `validateForCalculation()`; runtime `validateProject()` keeps draft semantics |
 | `E-EQ-002` | ✓ (PR #2) | Non-positive numeric value (entered but ≤ 0) |
-| `E-EQ-003..005` | — | Branch equipment from/to bus errors — deferred to PR #3 |
-| `W-NET-001` | — | Branch-chain endpoint vs. equipment from/to mismatch — deferred to PR #3 |
-| `W-EQ-002` | — | Non-3P topology — deferred to PR #3 |
-| `W-EQ-003` | — | Transformer %R vs X/R inconsistency — deferred to PR #3 |
-| `W-EQ-004` | — | Motor kW vs HP inconsistency — deferred to PR #3 |
-| `W-CBL-001` | — | Cable manual R/X audit hint — deferred to PR #3 |
+| `E-EQ-003..005` | ✓ (PR #3) | Branch from/to identical bus (always); both-missing only escalated by `validateForCalculation()` |
+| `W-NET-001` | ✓ (PR #3) | Branch-chain endpoint vs. equipment fromBus/toBus mismatch |
+| `W-EQ-002` | ✓ (PR #3) | Non-3P topology warning |
+| `W-EQ-003` | ✓ (PR #3) | Transformer %R vs X/R inconsistency vs %Z (≤5% tolerance) |
+| `W-EQ-004` | ✓ (PR #3) | Motor kW vs HP inconsistency (1 hp = 0.7457 kW, ≤5% tolerance) |
+| `W-CBL-001` | ✓ (PR #3) | Cable manual R/X audit hint (Stage 4 vendor data review reminder) |
 | `E-DIA-001` | ✓ | Stage-1: transformer must have diagram node |
 | `E-DIA-002` | ✓ | Stage-1: edge must not carry transformer |
 | `E-DIA-003` | ✓ | Stage-1: placeholder containedBusIds must reference an existing bus |
@@ -115,7 +115,17 @@ Top-level key order (enforced by canonical):
 
 - **PR #1** — foundation: monorepo, core model, schemas, deterministic save/load, validation skeleton, demo fixture, tests, acceptance manifest, minimal read-only viewer.
 - **PR #2** — editable UI: equipment palette (all 11 kinds), `createEquipment` factory wired to canonical collections, property-panel editing for Bus / Utility / Transformer / Motor / Generator (placeholder forms for the remaining kinds), validation extensions `E-NET-002` (floating bus) and `E-EQ-002` (non-positive numeric), open/save JSON via `serializeProjectFile`/`loadProjectFile`.
-- **PR #3** — branch-chain wiring UX, additional cross-field warnings (`W-EQ-002..004`, `W-CBL-001`, `W-NET-001`), import-time `E-EQ-001` escalation, calculation-status placeholder UI, project tree, and acceptance closure.
+- **PR #3** — UI polish + validation closure: AC18 calculation-status placeholder UI (per-module `not_implemented` / `disabled_by_validation` cards, no fake results), tabbed left sidebar (Palette / Project Tree), tabbed bottom panel (Validation / Calculation Status), polished ValidationPanel (severity filters, code/field/path metadata, saved-vs-runtime audit note), detailed forms for Cable / Breaker / Switch / Load / MCC / SWGR placeholders, validation rules `E-EQ-001` (via `validateForCalculation()`), `E-EQ-003..005` (branch identical bus), `W-NET-001`, `W-EQ-002..004`, `W-CBL-001`, plus apps/web component tests covering palette, forms, validation panel, and calculation status placeholder.
+
+## PR #3 calculation-readiness policy
+
+`validateProject()` is editor-friendly and never escalates draft missing-field info to errors. Callers that need calculation- or import-time strictness should call `validateForCalculation(project)`, which:
+
+1. Re-runs every PR #1/#2/#3 rule via `validateProject()`.
+2. Escalates `I-EQ-001` (info) to `E-EQ-001` (error).
+3. Adds `E-EQ-003 / E-EQ-004 / E-EQ-005` whenever a transformer / cable / breaker / switch has at least one missing endpoint — runtime `validateProject()` only fires those when both endpoints are non-null and identical.
+
+The runtime UI continues to surface the editor-friendly `validateProject()` summary so a freshly created blank record never flashes errors. `validateForCalculation()` is intentionally a separate function so future calculation stages and the import path can opt in deliberately without affecting interactive editing.
 
 ## PR #2 editor architecture
 
