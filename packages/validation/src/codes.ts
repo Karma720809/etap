@@ -19,10 +19,12 @@
 //   E-DIA-004 branch_chain edge references missing equipment internalId
 //   E-DIA-005 branch_chain edge references equipment whose kind is not breaker/cable/switch
 //
-// Codes deliberately deferred to PR #2 or later:
+// Codes added in PR #2:
 //   E-NET-002 floating bus (graph reachability)
+//   E-EQ-002  non-positive numeric value (entered but ≤ 0)
+//
+// Codes deliberately deferred to PR #3 or later:
 //   E-EQ-001  required-field escalation for calculation-readiness/import
-//   E-EQ-002  non-positive required numeric
 //   E-EQ-003..005  branch equipment from/to bus errors
 //   W-NET-001 branch chain endpoint vs equipment from/to mismatch
 //   W-EQ-002  non-3P topology
@@ -37,10 +39,12 @@ export const STAGE1_VALIDATION_CODES = {
   "W-ID-001": { severity: "warning" as ValidationSeverity, message: "Duplicate tag" },
   "I-NET-001": { severity: "info" as ValidationSeverity, message: "Project is empty; add a source and a bus to begin." },
   "E-NET-001": { severity: "error" as ValidationSeverity, message: "Electrical model has no in-service utility or generator source." },
+  "E-NET-002": { severity: "error" as ValidationSeverity, message: "Floating bus: not reachable from any in-service source path" },
   "E-NET-003": { severity: "error" as ValidationSeverity, message: "Equipment references a non-existent bus internalId" },
   "E-NET-004": { severity: "error" as ValidationSeverity, message: "Diagram edge references a missing node id" },
   "E-NET-005": { severity: "error" as ValidationSeverity, message: "Diagram node references missing equipment internalId" },
   "I-EQ-001": { severity: "info" as ValidationSeverity, message: "Draft equipment has missing required fields" },
+  "E-EQ-002": { severity: "error" as ValidationSeverity, message: "Numeric field must be positive" },
   "E-DIA-001": { severity: "error" as ValidationSeverity, message: "Transformer is missing its diagram node (must be represented as a node, not an edge)" },
   "E-DIA-002": { severity: "error" as ValidationSeverity, message: "Diagram edge points at a transformer; transformers must be diagram nodes" },
   "E-DIA-003": { severity: "error" as ValidationSeverity, message: "Placeholder containedBusIds references a non-existent bus" },

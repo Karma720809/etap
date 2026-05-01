@@ -7,6 +7,8 @@ import { validatePlaceholders } from "./validatePlaceholders.js";
 import { validateBranchChains } from "./validateBranchChains.js";
 import { validateTransformerAsNode } from "./validateTransformerAsNode.js";
 import { validateDraft } from "./validateDraft.js";
+import { validateFloatingBus } from "./validateFloatingBus.js";
+import { validateNumericPositive } from "./validateNumericPositive.js";
 
 // Stage 1 PR #1 runtime validation entry point. Returns a ValidationSummary
 // that callers may treat as the authoritative state. The saved validation
@@ -15,10 +17,12 @@ export function validateProject(project: PowerSystemProjectFile): ValidationSumm
   const issues: BuiltValidationIssue[] = [
     ...validateIds(project),
     ...validateConnectivity(project),
+    ...validateFloatingBus(project),
     ...validatePlaceholders(project),
     ...validateBranchChains(project),
     ...validateTransformerAsNode(project),
     ...validateDraft(project),
+    ...validateNumericPositive(project),
   ];
   return {
     status: summaryStatus(issues),

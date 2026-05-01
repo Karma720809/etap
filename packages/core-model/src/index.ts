@@ -53,3 +53,5 @@ export {
 
 export * from "./ids.js";
 export * from "./tag-counters.js";
+export * from "./factories.js";
+export type { EquipmentKind } from "./equipment-kind.js";
