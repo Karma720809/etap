@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.local/power-system-study/stage-1-project-file.schema.json",
   "title": "Power System Study App Stage 1 Project File",
-  "description": "Schema-level validation for Stage 1 Rev C save/load/import boundaries. Semantic engineering validation remains in packages/validation.",
+  "description": "Schema-level validation for Stage 1 Rev D save/load/import boundaries. Semantic engineering validation remains in packages/validation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -41,7 +41,9 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/CalculationSnapshotPlaceholder"
-      }
+      },
+      "maxItems": 0,
+      "description": "Stage 1 policy: reserved field; must remain empty. The item schema is preserved for forward compatibility with Stage 2."
     },
     "tagCounters": {
       "type": "object",
@@ -1491,5 +1493,5 @@
       }
     }
   },
-  "$comment": "Stage 1 Project File JSON Schema Rev D. Semantically aligned with Rev C; formatted deterministically. Loader warning/error behavior is defined in the Zod reference loader, not in JSON Schema."
+  "$comment": "Stage 1 Project File JSON Schema Rev D. Loader warning/error behavior is defined in the Zod reference loader, not in JSON Schema."
 }

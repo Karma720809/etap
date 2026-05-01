@@ -4,7 +4,7 @@ import type { EquipmentKind } from "./equipment-kind.js";
 export type TagCounters = Record<string, number>;
 
 // Stage 1 policy:
-// - tagCounters track default auto-tag prefixes (UTL, GEN, BUS, TR, CBL, BRK, SW, LOAD, M, MCC, SWGR).
+// - tagCounters track default auto-tag prefixes (UTL, GEN, BUS, TR, CBL, BRK, SW, LD, M, MCC, SWGR).
 // - User-edited sub-prefix tags (e.g. "BUS-MV-001") are allowed but are NOT tracked separately.
 // - The duplicate-tag validator (W-ID-001) is the safety mechanism.
 // - Counters are monotonic; never decremented when equipment is deleted; never reused.

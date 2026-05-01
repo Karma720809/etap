@@ -8,7 +8,7 @@ const KIND_TO_PREFIX: Record<EquipmentKind, string> = {
   cable: "CBL",
   breaker: "BRK",
   switch: "SW",
-  load: "LOAD",
+  load: "LD",
   motor: "M",
   mcc_placeholder: "MCC",
   switchgear_placeholder: "SWGR",

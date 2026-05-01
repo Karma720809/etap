@@ -6,7 +6,7 @@ import { z } from "zod";
 
 /**
  * Stage 1 runtime schema for Power System Study App project files.
- * Baseline: Stage 1 One-Line Diagram MVP Spec Rev C.
+ * Baseline: Stage 1 One-Line Diagram MVP Spec Rev D.
  *
  * Scope:
  * - Schema-level validation for save/load/import boundaries.
@@ -346,7 +346,9 @@ export const PowerSystemProjectFileSchema = z.object({
   equipment: EquipmentCollectionsSchema,
   diagram: DiagramModelSchema,
   scenarios: z.array(ScenarioModelSchema),
-  calculationSnapshots: z.array(CalculationSnapshotPlaceholderSchema).optional(),
+  // Stage 1 policy: calculationSnapshots is reserved and must remain empty.
+  // The placeholder element schema is kept for forward compatibility with Stage 2.
+  calculationSnapshots: z.array(CalculationSnapshotPlaceholderSchema).max(0).optional(),
   tagCounters: z.record(z.string(), z.number().int().nonnegative()),
   validation: ValidationSummarySchema.optional(),
 }).strict();

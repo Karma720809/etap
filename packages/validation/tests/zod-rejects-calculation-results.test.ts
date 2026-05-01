@@ -48,4 +48,20 @@ describe("strict-mode rejects forbidden top-level keys", () => {
     const parse = PowerSystemProjectFileSchema.safeParse(projectShape);
     expect(parse.success).toBe(true);
   });
+
+  it("a non-empty calculationSnapshots array is rejected in Stage 1", () => {
+    const projectShape = {
+      ...baseValidProject,
+      calculationSnapshots: [
+        {
+          snapshotId: "snap-1",
+          createdAt: NOW,
+          module: "load_flow",
+          status: "placeholder_reserved",
+        },
+      ],
+    };
+    const parse = PowerSystemProjectFileSchema.safeParse(projectShape);
+    expect(parse.success).toBe(false);
+  });
 });

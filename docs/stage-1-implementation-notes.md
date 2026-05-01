@@ -109,7 +109,7 @@ Top-level key order (enforced by canonical):
 
 ## tagCounters semantics
 
-`tagCounters` track default auto-tag prefixes only: `UTL`, `GEN`, `BUS`, `TR`, `CBL`, `BRK`, `SW`, `LOAD`, `M`, `MCC`, `SWGR`. User-edited sub-prefix tags such as `BUS-MV-001` are allowed but are not separately tracked. Counters are monotonic: never decrement on delete, never reuse numbers. Duplicate-tag validation (`W-ID-001`) is the safety mechanism for any tag collision.
+`tagCounters` track default auto-tag prefixes only: `UTL`, `GEN`, `BUS`, `TR`, `CBL`, `BRK`, `SW`, `LD`, `M`, `MCC`, `SWGR`. User-edited sub-prefix tags such as `BUS-MV-001` are allowed but are not separately tracked. Counters are monotonic: never decrement on delete, never reuse numbers. Duplicate-tag validation (`W-ID-001`) is the safety mechanism for any tag collision.
 
 ## PR split
 
