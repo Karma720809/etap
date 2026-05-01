@@ -5,6 +5,8 @@ export { validatePlaceholders } from "./validatePlaceholders.js";
 export { validateBranchChains } from "./validateBranchChains.js";
 export { validateTransformerAsNode } from "./validateTransformerAsNode.js";
 export { validateDraft } from "./validateDraft.js";
+export { validateFloatingBus } from "./validateFloatingBus.js";
+export { validateNumericPositive } from "./validateNumericPositive.js";
 export {
   STAGE1_VALIDATION_CODES,
   defaultMessageFor,

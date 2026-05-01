@@ -1,6 +1,6 @@
-# Stage 1 Implementation Notes (PR #1)
+# Stage 1 Implementation Notes
 
-This document accompanies the PR #1 foundation. It is non-normative; the canonical specifications live under `docs/stage-1-baseline/`.
+This document accompanies the Stage 1 PRs. It is non-normative; the canonical specifications live under `docs/stage-1-baseline/`.
 
 ## Stage 1 is editor-first; calculations are deliberately absent
 
@@ -88,19 +88,19 @@ Top-level key order (enforced by canonical):
 | `W-ID-001` | ✓ | Duplicate tag (default warning) |
 | `I-NET-001` | ✓ | Empty project info |
 | `E-NET-001` | ✓ | Non-empty model has no in-service utility/generator source |
-| `E-NET-002` | — | Floating bus — deferred to PR #2 (graph reachability) |
+| `E-NET-002` | ✓ (PR #2) | Floating bus reachability via in-service transformer/cable/closed breaker/closed switch |
 | `E-NET-003` | ✓ | Equipment references missing bus internalId |
 | `E-NET-004` | ✓ | Diagram edge references missing node id |
 | `E-NET-005` | ✓ | Diagram node references missing equipment internalId |
 | `I-EQ-001` | ✓ | Draft equipment has missing required field |
-| `E-EQ-001` | — | Calculation-readiness/import escalation — deferred to PR #2 |
-| `E-EQ-002` | — | Non-positive required numeric — deferred to PR #2 |
-| `E-EQ-003..005` | — | Branch equipment from/to bus errors — deferred to PR #2 |
-| `W-NET-001` | — | Branch-chain endpoint vs. equipment from/to mismatch — deferred to PR #2 |
-| `W-EQ-002` | — | Non-3P topology — deferred to PR #2 |
-| `W-EQ-003` | — | Transformer %R vs X/R inconsistency — deferred to PR #2 |
-| `W-EQ-004` | — | Motor kW vs HP inconsistency — deferred to PR #2 |
-| `W-CBL-001` | — | Cable manual R/X audit hint — deferred to PR #2 |
+| `E-EQ-001` | — | Calculation-readiness/import escalation — deferred to PR #3 |
+| `E-EQ-002` | ✓ (PR #2) | Non-positive numeric value (entered but ≤ 0) |
+| `E-EQ-003..005` | — | Branch equipment from/to bus errors — deferred to PR #3 |
+| `W-NET-001` | — | Branch-chain endpoint vs. equipment from/to mismatch — deferred to PR #3 |
+| `W-EQ-002` | — | Non-3P topology — deferred to PR #3 |
+| `W-EQ-003` | — | Transformer %R vs X/R inconsistency — deferred to PR #3 |
+| `W-EQ-004` | — | Motor kW vs HP inconsistency — deferred to PR #3 |
+| `W-CBL-001` | — | Cable manual R/X audit hint — deferred to PR #3 |
 | `E-DIA-001` | ✓ | Stage-1: transformer must have diagram node |
 | `E-DIA-002` | ✓ | Stage-1: edge must not carry transformer |
 | `E-DIA-003` | ✓ | Stage-1: placeholder containedBusIds must reference an existing bus |
@@ -113,6 +113,14 @@ Top-level key order (enforced by canonical):
 
 ## PR split
 
-- **PR #1 (this PR)** — foundation: monorepo, core model, schemas, deterministic save/load, validation skeleton, demo fixture, tests, acceptance manifest, minimal read-only viewer.
-- **PR #2** — equipment forms (Cable, Breaker, Switch, Load, Generator, MCC, Switchgear, Bus voltage UX, Motor), property-panel editing routed to canonical equipment collections, full validation rules deferred above (`E-NET-002`, `E-EQ-002+`, `W-EQ-002..004`, `W-CBL-001`, `W-NET-001`).
-- **PR #3** — UI polish, validation panel UX, project tree polish, calculation-status placeholder UI (`not_implemented` / `disabled_by_validation`), acceptance closure.
+- **PR #1** — foundation: monorepo, core model, schemas, deterministic save/load, validation skeleton, demo fixture, tests, acceptance manifest, minimal read-only viewer.
+- **PR #2** — editable UI: equipment palette (all 11 kinds), `createEquipment` factory wired to canonical collections, property-panel editing for Bus / Utility / Transformer / Motor / Generator (placeholder forms for the remaining kinds), validation extensions `E-NET-002` (floating bus) and `E-EQ-002` (non-positive numeric), open/save JSON via `serializeProjectFile`/`loadProjectFile`.
+- **PR #3** — branch-chain wiring UX, additional cross-field warnings (`W-EQ-002..004`, `W-CBL-001`, `W-NET-001`), import-time `E-EQ-001` escalation, calculation-status placeholder UI, project tree, and acceptance closure.
+
+## PR #2 editor architecture
+
+- `apps/web/src/state/projectStore.ts` is the single source of truth: a `useReducer`-backed store wrapped in `ProjectProvider`. Actions: `addEquipment`, `updateEquipment`, `selectEquipment`, `replaceProject`, `markClean`. The reducer is a pure function and is unit-tested directly.
+- `packages/core-model/src/factories.ts` exports `createEquipment(project, kind)`. It mints internalIds deterministically from existing project state (max suffix + 1 per `eq_<token>_NNN`), advances the matching `tagCounter`, builds canonical Rev D records (canonical names — `connectedBus`, `status`, `fromBus`/`toBus`), and adds a diagram node for every kind except cable/breaker/switch (those are branch-only and never get a standalone diagram node).
+- React Flow is still a renderer only; `DiagramCanvas` derives its nodes/edges from project state and dispatches selection back into the store.
+- `updateEquipment` ignores `internalId`, `kind`, and `createdAt` patches — internalIds are immutable per Rev D §4.1.
+- Save still goes through `serializeProjectFile` (top-level key order, equipment sorted by internalId, recursive key sort). Load goes through the canonical `loadProjectFile` and surfaces both `schemaWarnings` and `schemaErrors` to the user.
