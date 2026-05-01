@@ -61,7 +61,7 @@ function buildBranchChainProject(branchFromBus: string | null, branchToBus: stri
 }
 
 describe("W-NET-001 — branch_chain endpoint mismatch", () => {
-  it("fires when contained equipment fromBus disagrees with chain endpoint nodes", () => {
+  it("fires when contained equipment fromBus references a bus outside the chain endpoints", () => {
     const project = buildBranchChainProject("eq_bus_other", "eq_bus_b");
     project.equipment.buses.push({
       internalId: "eq_bus_other",
@@ -79,7 +79,7 @@ describe("W-NET-001 — branch_chain endpoint mismatch", () => {
     expect(result.issues.some((i) => i.code === "W-NET-001")).toBe(true);
   });
 
-  it("stays silent when contained equipment matches chain endpoints", () => {
+  it("stays silent when contained equipment matches chain endpoints in the same direction", () => {
     const project = buildBranchChainProject("eq_bus_a", "eq_bus_b");
     const result = validateProject(project);
     expect(result.issues.some((i) => i.code === "W-NET-001")).toBe(false);
@@ -89,5 +89,53 @@ describe("W-NET-001 — branch_chain endpoint mismatch", () => {
     const project = buildBranchChainProject(null, null);
     const result = validateProject(project);
     expect(result.issues.some((i) => i.code === "W-NET-001")).toBe(false);
+  });
+
+  it("fires when contained equipment fromBus/toBus are reversed relative to the chain direction", () => {
+    // Spec §4.8 makes branch_chain ordering load-bearing for Stage 2+ network
+    // conversion, so a branch_chain BUS-A → BUS-B with a cable declared as
+    // fromBus=BUS-B / toBus=BUS-A must NOT pass: it would silently feed the
+    // calculation pipeline a reversed orientation. W-NET-001 covers this case.
+    const project = buildBranchChainProject("eq_bus_b", "eq_bus_a");
+    const result = validateProject(project);
+    const reversal = result.issues.filter((i) => i.code === "W-NET-001");
+    expect(reversal).toHaveLength(1);
+    expect(reversal[0]!.equipmentInternalId).toBe("eq_cbl_1");
+  });
+
+  it("fires when only fromBus is reversed (toBus null)", () => {
+    const project = buildBranchChainProject("eq_bus_b", null);
+    const result = validateProject(project);
+    expect(result.issues.some((i) => i.code === "W-NET-001")).toBe(true);
+  });
+
+  it("fires when only toBus is reversed (fromBus null)", () => {
+    const project = buildBranchChainProject(null, "eq_bus_a");
+    const result = validateProject(project);
+    expect(result.issues.some((i) => i.code === "W-NET-001")).toBe(true);
+  });
+
+  it("preserves branchEquipmentInternalIds order regardless of W-NET-001 outcome", () => {
+    // The validator must never reorder branch entries — Stage 2+ relies on the
+    // original upstream-to-downstream order (Spec §4.8 / §6.2).
+    const project = buildBranchChainProject("eq_bus_b", "eq_bus_a");
+    project.equipment.breakers.push({
+      internalId: "eq_brk_1",
+      tag: "BRK-001",
+      kind: "breaker",
+      createdAt: NOW,
+      updatedAt: NOW,
+      deviceType: "breaker",
+      fromBus: "eq_bus_a",
+      toBus: "eq_bus_b",
+      state: "closed",
+      ratedVoltageKv: 0.4,
+      ratedCurrentA: 100,
+      status: "in_service",
+    });
+    const edge = project.diagram.edges[0]!;
+    edge.branchEquipmentInternalIds = ["eq_brk_1", "eq_cbl_1"];
+    validateProject(project);
+    expect(edge.branchEquipmentInternalIds).toEqual(["eq_brk_1", "eq_cbl_1"]);
   });
 });

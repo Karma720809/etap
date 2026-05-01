@@ -33,12 +33,24 @@ const styles = {
     borderRadius: 3,
     fontSize: 12,
     display: "grid",
-    gridTemplateColumns: "78px 1fr",
+    gridTemplateColumns: "70px 78px 1fr",
     gap: 8,
     cursor: "pointer",
     alignItems: "start",
   },
-  code: { fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11, color: "#475569" },
+  severityBadge: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.5,
+    padding: "2px 6px",
+    borderRadius: 3,
+    textAlign: "center" as const,
+    border: "1px solid currentColor",
+    background: "rgba(255,255,255,0.6)",
+    alignSelf: "start" as const,
+  },
+  code: { fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 11, color: "#475569", alignSelf: "start" as const },
   details: { display: "flex", flexDirection: "column" as const, gap: 2 },
   message: { lineHeight: 1.3 },
   meta: { fontSize: 11, color: "#475569" },
@@ -138,10 +150,19 @@ export function ValidationPanel() {
                 data-testid={`issue-${issue.code}`}
                 data-severity={issue.severity}
               >
-                <span style={styles.code}>{issue.code}</span>
+                <span
+                  style={styles.severityBadge}
+                  data-testid={`issue-${issue.code}-severity`}
+                  aria-label={`severity ${issue.severity}`}
+                >
+                  {issue.severity}
+                </span>
+                <span style={styles.code} data-testid={`issue-${issue.code}-code`}>{issue.code}</span>
                 <span style={styles.details}>
-                  <span style={styles.message}>{issue.message}</span>
-                  {location ? <span style={styles.meta}>{location}</span> : null}
+                  <span style={styles.message} data-testid={`issue-${issue.code}-message`}>{issue.message}</span>
+                  {location ? (
+                    <span style={styles.meta} data-testid={`issue-${issue.code}-location`}>{location}</span>
+                  ) : null}
                 </span>
               </li>
             );
