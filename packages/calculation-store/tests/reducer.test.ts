@@ -342,6 +342,97 @@ describe("calculationReducer — runFailed", () => {
     const key = retentionKeyToString(deriveRetentionKey(success));
     expect(after2.retainedResults[key]?.bundle).toBe(success);
   });
+
+  // PR #6 follow-up coverage. A failed runtime run after a successful
+  // one must update `lastFailedSnapshot` AND leave the previously
+  // retained successful record untouched. Spec §10.5: latest
+  // successful per `(scenarioId, module, subCase)` is preserved
+  // across subsequent failures so the user can compare the failure
+  // against the last good run.
+  it("failed runtime bundle after a success keeps the retained successful result", () => {
+    const success = fakeBundle("SCN-A", "valid", "snap_ok");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: success,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    const successKey = retentionKeyToString(deriveRetentionKey(success));
+    expect(after1.retainedResults[successKey]?.bundle).toBe(success);
+    expect(after1.lastFailedSnapshot).toBeNull();
+
+    const failed = fakeBundle("SCN-A", "failed", "snap_f");
+    const failedBuild = fakeBuild("SCN-A");
+    const after2 = calculationReducer(after1, {
+      type: "runFailed",
+      at: "2026-05-02T03:00:00Z",
+      message: "E-LF-001: non-convergence",
+      bundle: failed,
+      build: failedBuild,
+      reason: "runtime_failure",
+    });
+
+    expect(after2.lifecycle).toBe("failed");
+    // The retained successful record is preserved as-is — same key,
+    // same bundle reference, NOT marked stale (only project edits
+    // flip stale; a failed re-run does not).
+    expect(Object.keys(after2.retainedResults)).toEqual([successKey]);
+    expect(after2.retainedResults[successKey]?.bundle).toBe(success);
+    expect(after2.retainedResults[successKey]?.stale).toBe(false);
+    // The failed snapshot lands on `lastFailedSnapshot`.
+    expect(after2.lastFailedSnapshot?.snapshot).toBe(failed.snapshot);
+    expect(after2.lastFailedSnapshot?.reason).toBe("runtime_failure");
+    expect(after2.lastFailedSnapshot?.recordedAt).toBe("2026-05-02T03:00:00Z");
+    expect(after2.lastFailedSnapshot?.message).toBe("E-LF-001: non-convergence");
+    expect(after2.lastFailedSnapshot?.build).toBe(failedBuild);
+  });
+
+  // PR #6 follow-up coverage. A pre-flight validation failure that
+  // ships an explicit snapshot (e.g., from
+  // `validateForCalculation()` packaging the AppNetwork it inspected)
+  // must retain that snapshot under `reason="validation_failure"`
+  // without fabricating or deleting any successful retention entry.
+  it("retains a validation_failure snapshot without disturbing successful retention", () => {
+    const success = fakeBundle("SCN-A", "valid", "snap_ok");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: success,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    const successKey = retentionKeyToString(deriveRetentionKey(success));
+
+    const validationSnapshot = fakeSnapshot("SCN-A", "snap_validation");
+    const after2 = calculationReducer(after1, {
+      type: "runFailed",
+      at: "2026-05-02T04:00:00Z",
+      message: "E-NET-002: floating bus detected",
+      snapshot: validationSnapshot,
+      reason: "validation_failure",
+    });
+
+    expect(after2.lifecycle).toBe("failed");
+    expect(after2.lastFailedSnapshot?.snapshot).toBe(validationSnapshot);
+    expect(after2.lastFailedSnapshot?.reason).toBe("validation_failure");
+    expect(after2.lastFailedSnapshot?.recordedAt).toBe("2026-05-02T04:00:00Z");
+    expect(after2.lastFailedSnapshot?.message).toBe(
+      "E-NET-002: floating bus detected",
+    );
+    // No bundle was supplied — lastFailedSnapshot.build defaults to null.
+    expect(after2.lastFailedSnapshot?.build).toBeNull();
+
+    // The previously-retained successful record is untouched. The
+    // reducer must not delete it, must not mark it stale, and must
+    // not fabricate a new successful record from the validation
+    // snapshot.
+    expect(Object.keys(after2.retainedResults)).toEqual([successKey]);
+    expect(after2.retainedResults[successKey]?.bundle).toBe(success);
+    expect(after2.retainedResults[successKey]?.stale).toBe(false);
+    expect(after2.retainedResults[successKey]?.recordedAt).toBe(NOW);
+    // The active bundle ref is preserved — pre-bundle failure path
+    // (no `bundle` in action) does not blank the result panel.
+    expect(after2.bundle).toBe(success);
+  });
 });
 
 describe("calculationReducer — markStale", () => {

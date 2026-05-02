@@ -46,14 +46,12 @@ export type CalculationLifecycle =
  * Canonical module identifier for retention. Stage 2 MVP only ships
  * the Load Flow + Voltage Drop bundle — both modules ride the same
  * `LoadFlowRunBundle` and are retained as a unit under
- * `"load_flow_bundle"`. The literal is left open-ended so Stage 3
- * (`"short_circuit"`) and later (`"cable_sizing"`) can register their
- * own keys without a breaking change.
+ * `"load_flow_bundle"`. Future stages (Short Circuit, Cable Sizing,
+ * report export) will widen this union when they actually land; the
+ * Stage 2 surface stays narrow on purpose so unsupported module
+ * literals cannot reach this package's API.
  */
-export type CalculationModule =
-  | "load_flow_bundle"
-  | "short_circuit"
-  | "cable_sizing";
+export type CalculationModule = "load_flow_bundle";
 
 /**
  * Retention key per spec §10.5: latest successful result is kept per
