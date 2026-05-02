@@ -83,6 +83,7 @@ export {
 export {
   DEFAULT_SHORT_CIRCUIT_OPTIONS,
   SHORT_CIRCUIT_COMMAND,
+  SHORT_CIRCUIT_ISSUE_CODES,
   isShortCircuitSidecarResponse,
   type ShortCircuitCase,
   type ShortCircuitCommand,

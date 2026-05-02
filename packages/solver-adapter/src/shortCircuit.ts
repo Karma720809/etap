@@ -124,6 +124,30 @@ export type ShortCircuitIssueCode = ShortCircuitErrorCode | ShortCircuitWarningC
 export type ShortCircuitIssueSeverity = "error" | "warning";
 
 /**
+ * Canonical list of all valid Short Circuit issue codes (errors first,
+ * then warnings). Single source of truth for the structural guard
+ * (`isShortCircuitSidecarResponse`) and any consumer that needs to
+ * iterate the contract codes.
+ *
+ * The `satisfies readonly ShortCircuitIssueCode[]` clause makes the
+ * compiler reject this list if a code is added to or removed from the
+ * `ShortCircuitErrorCode` / `ShortCircuitWarningCode` unions without
+ * updating this constant — keeping the runtime set in lockstep with
+ * the type-level set.
+ */
+export const SHORT_CIRCUIT_ISSUE_CODES = [
+  "E-SC-001",
+  "E-SC-002",
+  "E-SC-003",
+  "E-SC-004",
+  "E-SC-005",
+  "E-SC-006",
+  "W-SC-001",
+  "W-SC-002",
+  "W-SC-003",
+] as const satisfies readonly ShortCircuitIssueCode[];
+
+/**
  * Wire-level issue carried on the sidecar response. The orchestrator
  * (PR #4) projects this onto the app-normalized `ShortCircuitIssue`
  * type; PR #2 only defines the wire shape.
@@ -236,6 +260,17 @@ const ALLOWED_FAULT_TYPES: ReadonlySet<ShortCircuitFaultType> = new Set(["threeP
 
 const ALLOWED_CALCULATION_CASES: ReadonlySet<ShortCircuitCase> = new Set(["maximum"]);
 
+const ALLOWED_ISSUE_CODES: ReadonlySet<ShortCircuitIssueCode> = new Set(
+  SHORT_CIRCUIT_ISSUE_CODES,
+);
+
+function isShortCircuitIssueCode(value: unknown): value is ShortCircuitIssueCode {
+  return (
+    typeof value === "string" &&
+    ALLOWED_ISSUE_CODES.has(value as ShortCircuitIssueCode)
+  );
+}
+
 function isNullableFiniteNumber(value: unknown): boolean {
   if (value === null) return true;
   return typeof value === "number" && Number.isFinite(value);
@@ -298,7 +333,12 @@ function isShortCircuitSidecarBusRow(value: unknown): value is ShortCircuitSidec
   if ("issueCodes" in row && row.issueCodes !== undefined) {
     if (!Array.isArray(row.issueCodes)) return false;
     for (const code of row.issueCodes) {
-      if (typeof code !== "string" || code.length === 0) return false;
+      // Only Stage 3 Short Circuit codes are allowed on the wire —
+      // Stage 1 / Stage 2 codes (e.g., `E-LF-001`) and arbitrary
+      // strings are rejected so the orchestrator (PR #4) cannot
+      // accidentally surface a leaked Load Flow code as a
+      // Short Circuit row issue.
+      if (!isShortCircuitIssueCode(code)) return false;
     }
   }
   return true;
@@ -307,7 +347,9 @@ function isShortCircuitSidecarBusRow(value: unknown): value is ShortCircuitSidec
 function isShortCircuitWireIssue(value: unknown): value is ShortCircuitWireIssue {
   if (typeof value !== "object" || value === null) return false;
   const issue = value as Record<string, unknown>;
-  if (typeof issue.code !== "string" || issue.code.length === 0) return false;
+  // Top-level issue codes must also be valid Short Circuit codes —
+  // see comment above on bus-row issueCodes for the rationale.
+  if (!isShortCircuitIssueCode(issue.code)) return false;
   if (typeof issue.message !== "string") return false;
   if (
     typeof issue.severity !== "string" ||
@@ -344,11 +386,15 @@ function isShortCircuitWireIssue(value: unknown): value is ShortCircuitWireIssue
  *     `"unavailable"` is orchestrator-synthesized and MUST NOT appear
  *     on the wire), and `voltageLevelKv` / `ikssKa` / `ipKa` / `ithKa`
  *     / `skssMva` each present as either a finite number or `null`;
- *   - every entry of `issues` carries `code: string`,
+ *   - every entry of `issues` carries a `code` drawn from the Short
+ *     Circuit issue-code set (`E-SC-001..006` / `W-SC-001..003` —
+ *     Stage 1 / Stage 2 codes such as `E-LF-001` are rejected so they
+ *     cannot leak across stage boundaries on the wire),
  *     `severity: "error" | "warning"`, and `message: string`.
  *
  * `issueCodes` on a bus row is the only optional field; when present
- * it must be an array of non-empty strings.
+ * it must be an array whose entries are all valid Short Circuit
+ * issue codes.
  */
 export function isShortCircuitSidecarResponse(
   value: unknown,

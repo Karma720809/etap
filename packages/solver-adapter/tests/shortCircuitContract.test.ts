@@ -19,6 +19,7 @@ import {
   DEFAULT_SHORT_CIRCUIT_OPTIONS,
   DEFAULT_SOLVER_OPTIONS,
   SHORT_CIRCUIT_COMMAND,
+  SHORT_CIRCUIT_ISSUE_CODES,
   SOLVER_INPUT_VERSION,
   isShortCircuitSidecarResponse,
   type ShortCircuitFaultTarget,
@@ -680,6 +681,141 @@ describe("isShortCircuitSidecarResponse — strict structural validation", () =>
 
   it("rejects an entirely non-object issue entry", () => {
     const broken = validResponse({ issues: ["E-SC-001" as unknown as ShortCircuitWireIssue] });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue-code rejection (PR #13 re-review blocker)
+  // -------------------------------------------------------------------------
+
+  it("accepts every declared Short Circuit issue code on a top-level issue", () => {
+    for (const code of SHORT_CIRCUIT_ISSUE_CODES) {
+      const severity: ShortCircuitWireIssue["severity"] =
+        code.startsWith("E-") ? "error" : "warning";
+      const response = validResponse({
+        issues: [{ code, severity, message: `code ${code}` }],
+      });
+      expect(isShortCircuitSidecarResponse(response)).toBe(true);
+    }
+  });
+
+  it("accepts every declared Short Circuit issue code in a bus row's issueCodes array", () => {
+    const response = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: [...SHORT_CIRCUIT_ISSUE_CODES],
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(response)).toBe(true);
+  });
+
+  it("rejects a top-level issue whose code is a Stage 1 / Stage 2 code (e.g., E-LF-001)", () => {
+    // Stage 1 / Stage 2 codes must NOT leak across the Stage 3 wire
+    // boundary. The wire model only carries `E-SC-*` / `W-SC-*` codes.
+    const broken = validResponse({
+      issues: [
+        {
+          code: "E-LF-001" as unknown as ShortCircuitWireIssue["code"],
+          severity: "error",
+          message: "leaked Load Flow code",
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a top-level issue whose code is an unknown string", () => {
+    const broken = validResponse({
+      issues: [
+        {
+          code: "NOT-A-CODE" as unknown as ShortCircuitWireIssue["code"],
+          severity: "error",
+          message: "garbage code",
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a top-level issue whose code is an empty string or non-string value", () => {
+    const empty = validResponse({
+      issues: [
+        {
+          code: "" as unknown as ShortCircuitWireIssue["code"],
+          severity: "error",
+          message: "blank code",
+        },
+      ],
+    });
+    const numeric = validResponse({
+      issues: [
+        {
+          code: 42 as unknown as ShortCircuitWireIssue["code"],
+          severity: "error",
+          message: "numeric code",
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(empty)).toBe(false);
+    expect(isShortCircuitSidecarResponse(numeric)).toBe(false);
+  });
+
+  it("rejects a bus row whose issueCodes contains a Stage 1 / Stage 2 code (e.g., E-LF-001)", () => {
+    const broken = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: ["E-LF-001"] as unknown as ShortCircuitIssueCode[],
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a bus row whose issueCodes contains an unknown string", () => {
+    const broken = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: ["NOT-A-CODE"] as unknown as ShortCircuitIssueCode[],
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a bus row whose issueCodes contains an empty string or non-string value", () => {
+    const empty = validResponse({
+      buses: [{ ...busRow(), issueCodes: [""] as unknown as ShortCircuitIssueCode[] }],
+    });
+    const numeric = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: [1 as unknown as ShortCircuitIssueCode],
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(empty)).toBe(false);
+    expect(isShortCircuitSidecarResponse(numeric)).toBe(false);
+  });
+
+  it("rejects a bus row whose issueCodes mixes one valid and one invalid code", () => {
+    // The "first valid, then invalid" ordering rules out a guard that
+    // only checks the head of the array.
+    const broken = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: [
+            "W-SC-001",
+            "E-LF-001",
+          ] as unknown as ShortCircuitIssueCode[],
+        },
+      ],
+    });
     expect(isShortCircuitSidecarResponse(broken)).toBe(false);
   });
 });

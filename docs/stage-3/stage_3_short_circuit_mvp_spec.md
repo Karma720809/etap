@@ -380,9 +380,10 @@ For an in-scope `AppNetwork` and a fault target list:
 These fields, missing or non-positive on an in-scope element, are
 calculation-blocking with the codes listed in §11. The check happens
 in `validateForCalculation()` via a new `validateForShortCircuit()`
-wrapper (Stage 3 PR #2). The wrapper reuses the Stage 2 readiness
-function's output shape; it does not duplicate Stage 2 readiness
-checks.
+wrapper (Stage 3 PR #4 — moved from PR #2 so the wrapper lands next
+to the orchestrator that consumes it). The wrapper reuses the Stage 2
+readiness function's output shape; it does not duplicate Stage 2
+readiness checks.
 
 - **Bus on the fault path**: `vnKv > 0`, `topology ∈ { 3P3W, 3P4W }`.
   (Already enforced by Stage 2 readiness for Load Flow; carried
@@ -431,10 +432,15 @@ fields.
 The Stage 2 contract rule (Stage 2 §8.2 / `solver_adapter_contract.md`
 §3.5) is preserved unchanged: pandapower element kinds, function
 names, and option keys never appear on the public API of
-`packages/network-model` or `packages/solver-adapter`. The new Stage 3
-contract types live in `packages/solver-adapter/src/shortCircuit.ts`
-(planned for Stage 3 PR #2) and use app-side vocabulary
-(`ShortCircuitFaultTarget`, `ShortCircuitOptions`, `ShortCircuitBusResult`).
+`packages/network-model` or `packages/solver-adapter`. The Stage 3
+contract types are split across two files using app-side vocabulary:
+the wire-side surface (`ShortCircuitFaultTarget`,
+`ShortCircuitOptions`, `ShortCircuitRequest`,
+`ShortCircuitSidecarBusRow`, `ShortCircuitSidecarResponse`) lands in
+`packages/solver-adapter/src/shortCircuit.ts` (Stage 3 PR #2); the
+app-normalized surface (`ShortCircuitBusResult`,
+`ShortCircuitResult`, `ShortCircuitRunBundle`) lands in
+`packages/solver-adapter/src/shortCircuitResults.ts` (Stage 3 PR #4).
 
 ### 5.3 SolverInput reuse — recommended path
 
@@ -1165,7 +1171,7 @@ graduation is recorded in §13 alongside each PR.
 | AC-S3-04 | The `ShortCircuitResult` model is defined: per-bus rows keyed by `busInternalId`, IEC 60909 outputs (`Ik''`, `ip`, `Ith`, `Sk''`), per-row status, top-level status, issues, metadata. Distinguishes pandapower-reliable outputs from optional outputs (`ipKa` / `ithKa` may be `null`). (§7) |
 | AC-S3-05 | Runtime-only guardrails preserved: `calculationSnapshots` stays empty in every Stage 3 PR; `calculationResults` is not added; no disk persistence; no fake numbers; runtime snapshot reused unchanged from Stage 2. (§8, §9.5, §17) |
 | AC-S3-06 | Non-goals and deferred items are explicitly listed: minimum case, line-end faults, generator subtransient, motor contribution, equipment duty, multi-slack, single-phase / DC / mixed-phase faults, arc flash, report export, cable sizing. (§2.3, §15) |
-| AC-S3-07 | The implementation PR breakdown is defined: Stage 3 PR #2 (contract / result types only), PR #3 (sidecar `run_short_circuit` + adapter tests), PR #4 (orchestrator + runtime snapshot/result normalization), PR #5 (UI result table / status wiring), PR #6 (acceptance closeout). Each PR has a concrete shipping list and a do-not-ship boundary. (§13) |
+| AC-S3-07 | The implementation PR breakdown is defined: Stage 3 PR #2 (contract / wire / input types only — request envelope, sidecar response shape, structural guard, issue codes), PR #3 (sidecar `run_short_circuit` + adapter transport call + adapter tests), PR #4 (orchestrator + app-normalized result types + `validateForShortCircuit()` + runtime snapshot/result normalization + `calculation-store` retention widening), PR #5 (UI result table / status wiring), PR #6 (acceptance closeout). Each PR has a concrete shipping list and a do-not-ship boundary. (§13) |
 
 ### 12.1 Proposed future manifest structure
 
@@ -1182,7 +1188,7 @@ block:
       { "id": "AC-S3-01", "summary": "Short Circuit MVP scope defined", "owner": "docs/stage-3/stage_3_short_circuit_mvp_spec.md §§1,2,3,4 + scripts/check-spec-coverage.ts (planned)" },
       { "id": "AC-S3-02", "summary": "AppNetwork remains solver-agnostic", "owner": "packages/schemas/tests/canonical-drift.test.ts + packages/network-model/tests/buildAppNetwork.test.ts + grep guard (no pandapower imports outside services/solver-sidecar/)" },
       { "id": "AC-S3-03", "summary": "Sidecar run_short_circuit command contract defined", "owner": "packages/solver-adapter/tests/shortCircuit.contract.test.ts (Stage 3 PR #2) + services/solver-sidecar/tests/run_short_circuit.test.py (Stage 3 PR #3) + opt-in packages/solver-adapter/tests/shortCircuit.integration.test.ts (RUN_SIDECAR_INTEGRATION=1)" },
-      { "id": "AC-S3-04", "summary": "ShortCircuitResult model defined", "owner": "packages/solver-adapter/src/shortCircuit.ts (Stage 3 PR #2) + packages/solver-adapter/tests/shortCircuit.results.test.ts" },
+      { "id": "AC-S3-04", "summary": "ShortCircuitResult model defined", "owner": "packages/solver-adapter/src/shortCircuitResults.ts (Stage 3 PR #4) + packages/solver-adapter/tests/shortCircuitResults.test.ts (Stage 3 PR #4) — wire-side types live in packages/solver-adapter/src/shortCircuit.ts (Stage 3 PR #2)" },
       { "id": "AC-S3-05", "summary": "Runtime-only guardrails preserved", "owner": "packages/calculation-store/tests/reducer.test.ts (short_circuit_bundle retention) + packages/schemas/src/stage_1_project_schema.rev_d.zod.ts pins calculationSnapshots to max(0) + apps/web/tests/calculationStore.test.tsx (project file unchanged after SC run)" },
       { "id": "AC-S3-06", "summary": "Non-goals and deferred items listed", "owner": "docs/stage-3/stage_3_short_circuit_mvp_spec.md §§2.3 and 15" },
       { "id": "AC-S3-07", "summary": "Implementation PR breakdown defined", "owner": "docs/stage-3/stage_3_short_circuit_mvp_spec.md §13" }
@@ -1398,14 +1404,15 @@ PR #1.
   inconsistency tolerance. The MVP picks scLevelMva when both are
   present and emits `W-SC-001` only when the two values are
   inconsistent beyond a documented tolerance — the tolerance itself
-  is to be set in Stage 3 PR #2 alongside the validation wrapper.
+  is to be set in Stage 3 PR #4 alongside the validation wrapper
+  (`validateForShortCircuit()` lands with the orchestrator).
   Default proposal: 5% relative difference between the two derived
   `s_sc_mva` equivalents, but this is to be confirmed with reference
   cases.
 - **S3-FU-07** — X/R handling when `xrRatio` is missing on a source.
   MVP blocks the run with `E-SC-002`. Whether to ship a documented
   default (e.g., 10 for utilities ≥ 33 kV, lower for LV) is a
-  documentation-and-defaults decision deferred to a Stage 3 PR #2
+  documentation-and-defaults decision deferred to a Stage 3 PR #4
   follow-up.
 - **S3-FU-08** — ANSI / IEEE C37 calculation basis as an alternative
   to IEC 60909. Requires either a separate engine or pandapower's
