@@ -27,6 +27,7 @@ import {
   type ShortCircuitRequest,
   type ShortCircuitSidecarBusRow,
   type ShortCircuitSidecarResponse,
+  type ShortCircuitWireIssue,
   type SolverInput,
   type SolverMetadata,
 } from "../src/index.js";
@@ -305,8 +306,31 @@ describe("ShortCircuitSidecarResponse / ShortCircuitSidecarBusRow", () => {
 // isShortCircuitSidecarResponse — structural guard
 // ---------------------------------------------------------------------------
 
-describe("isShortCircuitSidecarResponse", () => {
-  function validResponse(): ShortCircuitSidecarResponse {
+describe("isShortCircuitSidecarResponse — strict structural validation", () => {
+  function busRow(overrides: Partial<ShortCircuitSidecarBusRow> = {}): ShortCircuitSidecarBusRow {
+    return {
+      internalId: "eq_bus_mv",
+      voltageLevelKv: 6.6,
+      ikssKa: 18.42,
+      ipKa: 41.18,
+      ithKa: 19.05,
+      skssMva: 351.2,
+      status: "valid",
+      ...overrides,
+    };
+  }
+
+  function wireIssue(): ShortCircuitWireIssue {
+    return {
+      code: "E-SC-001",
+      severity: "error",
+      message: "pandapower exception",
+    };
+  }
+
+  function validResponse(
+    overrides: Partial<ShortCircuitSidecarResponse> = {},
+  ): ShortCircuitSidecarResponse {
     return {
       status: "succeeded",
       metadata: stubMetadata(),
@@ -317,26 +341,120 @@ describe("isShortCircuitSidecarResponse", () => {
         computeThermal: true,
         voltageFactor: 1.0,
       },
-      buses: [],
+      buses: [busRow()],
       issues: [],
+      ...overrides,
     };
   }
+
+  // -------------------------------------------------------------------------
+  // Acceptance baseline + nullable numeric tolerance
+  // -------------------------------------------------------------------------
 
   it("accepts a well-formed response", () => {
     expect(isShortCircuitSidecarResponse(validResponse())).toBe(true);
   });
+
+  it("accepts a response whose bus rows carry null numeric fields (failed/disabled rows)", () => {
+    const response = validResponse({
+      buses: [
+        busRow({
+          ikssKa: null,
+          ipKa: null,
+          ithKa: null,
+          skssMva: null,
+          voltageLevelKv: null,
+          status: "failed",
+          issueCodes: ["E-SC-001"],
+        }),
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(response)).toBe(true);
+  });
+
+  it("accepts an empty buses array (e.g., transport-validation failure with no rows)", () => {
+    const response = validResponse({ buses: [], status: "failed_validation" });
+    expect(isShortCircuitSidecarResponse(response)).toBe(true);
+  });
+
+  it("accepts an issues array with both error and warning entries", () => {
+    const response = validResponse({
+      issues: [
+        { code: "E-SC-002", severity: "error", message: "missing source data" },
+        { code: "W-SC-002", severity: "warning", message: "motors ignored" },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(response)).toBe(true);
+  });
+
+  it("accepts optional internalId / field on issues", () => {
+    const response = validResponse({
+      issues: [
+        {
+          code: "E-SC-003",
+          severity: "error",
+          message: "missing transformer impedance",
+          internalId: "eq_tr_1",
+          field: "vkPercent",
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(response)).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Top-level rejections
+  // -------------------------------------------------------------------------
 
   it("rejects null and primitives", () => {
     expect(isShortCircuitSidecarResponse(null)).toBe(false);
     expect(isShortCircuitSidecarResponse(undefined)).toBe(false);
     expect(isShortCircuitSidecarResponse("succeeded")).toBe(false);
     expect(isShortCircuitSidecarResponse(42)).toBe(false);
+    expect(isShortCircuitSidecarResponse(true)).toBe(false);
+    expect(isShortCircuitSidecarResponse([])).toBe(false);
   });
+
+  it("rejects an unknown top-level status string (not in the contract enum)", () => {
+    const broken = validResponse({ status: "ok" as unknown as ShortCircuitSidecarResponse["status"] });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects an empty top-level status string", () => {
+    const broken = validResponse({ status: "" as unknown as ShortCircuitSidecarResponse["status"] });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a non-string top-level status", () => {
+    const broken = { ...validResponse(), status: 1 as unknown as ShortCircuitSidecarResponse["status"] };
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Metadata rejections
+  // -------------------------------------------------------------------------
 
   it("rejects responses with a null metadata block (Stage 2 PR #4 hardening parity)", () => {
     const broken = { ...validResponse(), metadata: null };
     expect(isShortCircuitSidecarResponse(broken)).toBe(false);
   });
+
+  it("rejects metadata missing required fields", () => {
+    const noVersion = {
+      ...validResponse(),
+      metadata: { ...stubMetadata(), solverVersion: undefined },
+    };
+    const noOptions = {
+      ...validResponse(),
+      metadata: { ...stubMetadata(), options: null },
+    };
+    expect(isShortCircuitSidecarResponse(noVersion)).toBe(false);
+    expect(isShortCircuitSidecarResponse(noOptions)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // shortCircuit metadata-block rejections
+  // -------------------------------------------------------------------------
 
   it("rejects responses without the shortCircuit metadata block", () => {
     const r = validResponse() as unknown as Record<string, unknown>;
@@ -344,14 +462,42 @@ describe("isShortCircuitSidecarResponse", () => {
     expect(isShortCircuitSidecarResponse(r)).toBe(false);
   });
 
-  it("rejects responses without buses or issues arrays", () => {
-    const noBuses = { ...validResponse(), buses: undefined };
-    const noIssues = { ...validResponse(), issues: undefined };
-    expect(isShortCircuitSidecarResponse(noBuses)).toBe(false);
-    expect(isShortCircuitSidecarResponse(noIssues)).toBe(false);
+  it("rejects unsupported shortCircuit.calculationCase (e.g., 'minimum' is deferred per S3-FU-01)", () => {
+    const broken = {
+      ...validResponse(),
+      shortCircuit: {
+        ...validResponse().shortCircuit,
+        calculationCase: "minimum",
+      },
+    };
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
   });
 
-  it("rejects responses where shortCircuit.voltageFactor is not numeric", () => {
+  it("rejects unsupported shortCircuit.faultType (e.g., 'singlePhaseGround' is out of MVP)", () => {
+    const broken = {
+      ...validResponse(),
+      shortCircuit: {
+        ...validResponse().shortCircuit,
+        faultType: "singlePhaseGround",
+      },
+    };
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects non-boolean computePeak / computeThermal", () => {
+    const peakStr = {
+      ...validResponse(),
+      shortCircuit: { ...validResponse().shortCircuit, computePeak: "true" },
+    };
+    const thermalNum = {
+      ...validResponse(),
+      shortCircuit: { ...validResponse().shortCircuit, computeThermal: 1 },
+    };
+    expect(isShortCircuitSidecarResponse(peakStr)).toBe(false);
+    expect(isShortCircuitSidecarResponse(thermalNum)).toBe(false);
+  });
+
+  it("rejects responses where shortCircuit.voltageFactor is a string", () => {
     const broken = {
       ...validResponse(),
       shortCircuit: {
@@ -359,6 +505,181 @@ describe("isShortCircuitSidecarResponse", () => {
         voltageFactor: "cmax" as unknown as number,
       },
     };
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects non-finite voltageFactor (NaN / Infinity)", () => {
+    const nanFactor = {
+      ...validResponse(),
+      shortCircuit: { ...validResponse().shortCircuit, voltageFactor: Number.NaN },
+    };
+    const infFactor = {
+      ...validResponse(),
+      shortCircuit: { ...validResponse().shortCircuit, voltageFactor: Number.POSITIVE_INFINITY },
+    };
+    expect(isShortCircuitSidecarResponse(nanFactor)).toBe(false);
+    expect(isShortCircuitSidecarResponse(infFactor)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Bus row rejections
+  // -------------------------------------------------------------------------
+
+  it("rejects responses where buses is not an array", () => {
+    const broken = { ...validResponse(), buses: undefined };
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a bus row with a missing or non-string internalId", () => {
+    const noId = validResponse({
+      buses: [{ ...busRow(), internalId: undefined as unknown as string }],
+    });
+    const numericId = validResponse({
+      buses: [{ ...busRow(), internalId: 1 as unknown as string }],
+    });
+    const emptyId = validResponse({ buses: [{ ...busRow(), internalId: "" }] });
+    expect(isShortCircuitSidecarResponse(noId)).toBe(false);
+    expect(isShortCircuitSidecarResponse(numericId)).toBe(false);
+    expect(isShortCircuitSidecarResponse(emptyId)).toBe(false);
+  });
+
+  it("rejects a bus row with an unknown status (and the app-side 'unavailable' specifically)", () => {
+    const unknownStatus = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          status: "ok" as unknown as ShortCircuitSidecarBusRow["status"],
+        },
+      ],
+    });
+    const unavailable = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          status: "unavailable" as unknown as ShortCircuitSidecarBusRow["status"],
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(unknownStatus)).toBe(false);
+    // 'unavailable' is synthesized by the orchestrator (PR #4) for buses
+    // that were not in the fault target set. It must NEVER appear on the
+    // sidecar wire and the guard must reject it.
+    expect(isShortCircuitSidecarResponse(unavailable)).toBe(false);
+  });
+
+  it("rejects a bus row missing a required numeric field", () => {
+    for (const missing of ["voltageLevelKv", "ikssKa", "ipKa", "ithKa", "skssMva"] as const) {
+      const row = { ...busRow() } as Record<string, unknown>;
+      delete row[missing];
+      const broken = validResponse({
+        buses: [row as unknown as ShortCircuitSidecarBusRow],
+      });
+      expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+    }
+  });
+
+  it("rejects a bus row whose numeric fields are strings", () => {
+    const broken = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          ikssKa: "18.42" as unknown as number,
+        },
+      ],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects a bus row with NaN numeric fields (sidecar must emit null instead)", () => {
+    const broken = validResponse({
+      buses: [{ ...busRow(), ikssKa: Number.NaN }],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects malformed issueCodes (non-array, or non-string entries)", () => {
+    const notArray = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: "E-SC-001" as unknown as string[],
+        },
+      ],
+    });
+    const numericEntry = validResponse({
+      buses: [
+        {
+          ...busRow(),
+          issueCodes: [1 as unknown as string],
+        },
+      ],
+    });
+    const emptyEntry = validResponse({
+      buses: [{ ...busRow(), issueCodes: [""] }],
+    });
+    expect(isShortCircuitSidecarResponse(notArray)).toBe(false);
+    expect(isShortCircuitSidecarResponse(numericEntry)).toBe(false);
+    expect(isShortCircuitSidecarResponse(emptyEntry)).toBe(false);
+  });
+
+  it("rejects an entirely non-object bus row", () => {
+    const broken = validResponse({ buses: ["eq_bus_mv" as unknown as ShortCircuitSidecarBusRow] });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue rejections
+  // -------------------------------------------------------------------------
+
+  it("rejects responses where issues is not an array", () => {
+    const broken = { ...validResponse(), issues: undefined };
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects an issue with an invalid severity (e.g., 'fatal' / 'info')", () => {
+    const fatal = validResponse({
+      issues: [{ ...wireIssue(), severity: "fatal" as unknown as ShortCircuitWireIssue["severity"] }],
+    });
+    const info = validResponse({
+      issues: [{ ...wireIssue(), severity: "info" as unknown as ShortCircuitWireIssue["severity"] }],
+    });
+    expect(isShortCircuitSidecarResponse(fatal)).toBe(false);
+    // Severity 'info' is intentionally NOT part of the Short Circuit
+    // wire vocabulary — the contract is "error" | "warning" only.
+    expect(isShortCircuitSidecarResponse(info)).toBe(false);
+  });
+
+  it("rejects an issue without a string message", () => {
+    const broken = validResponse({
+      issues: [{ ...wireIssue(), message: undefined as unknown as string }],
+    });
+    expect(isShortCircuitSidecarResponse(broken)).toBe(false);
+  });
+
+  it("rejects an issue without a non-empty code", () => {
+    const noCode = validResponse({
+      issues: [{ ...wireIssue(), code: undefined as unknown as string }],
+    });
+    const emptyCode = validResponse({
+      issues: [{ ...wireIssue(), code: "" }],
+    });
+    expect(isShortCircuitSidecarResponse(noCode)).toBe(false);
+    expect(isShortCircuitSidecarResponse(emptyCode)).toBe(false);
+  });
+
+  it("rejects an issue with a non-string optional internalId / field", () => {
+    const badId = validResponse({
+      issues: [{ ...wireIssue(), internalId: 1 as unknown as string }],
+    });
+    const badField = validResponse({
+      issues: [{ ...wireIssue(), field: 2 as unknown as string }],
+    });
+    expect(isShortCircuitSidecarResponse(badId)).toBe(false);
+    expect(isShortCircuitSidecarResponse(badField)).toBe(false);
+  });
+
+  it("rejects an entirely non-object issue entry", () => {
+    const broken = validResponse({ issues: ["E-SC-001" as unknown as ShortCircuitWireIssue] });
     expect(isShortCircuitSidecarResponse(broken)).toBe(false);
   });
 });

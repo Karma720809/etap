@@ -213,52 +213,168 @@ export interface ShortCircuitSidecarResponse {
 // Structural guards
 // ---------------------------------------------------------------------------
 
+const NUMERIC_BUS_FIELDS = ["voltageLevelKv", "ikssKa", "ipKa", "ithKa", "skssMva"] as const;
+
+const ALLOWED_TOP_LEVEL_STATUSES: ReadonlySet<ShortCircuitSidecarResponseStatus> = new Set([
+  "succeeded",
+  "failed_validation",
+  "failed_solver",
+]);
+
+const ALLOWED_BUS_ROW_STATUSES: ReadonlySet<ShortCircuitSidecarBusRowStatus> = new Set([
+  "valid",
+  "warning",
+  "failed",
+]);
+
+const ALLOWED_ISSUE_SEVERITIES: ReadonlySet<ShortCircuitIssueSeverity> = new Set([
+  "error",
+  "warning",
+]);
+
+const ALLOWED_FAULT_TYPES: ReadonlySet<ShortCircuitFaultType> = new Set(["threePhase"]);
+
+const ALLOWED_CALCULATION_CASES: ReadonlySet<ShortCircuitCase> = new Set(["maximum"]);
+
+function isNullableFiniteNumber(value: unknown): boolean {
+  if (value === null) return true;
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isMetadataShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const meta = value as Record<string, unknown>;
+  return (
+    typeof meta.solverName === "string" &&
+    typeof meta.solverVersion === "string" &&
+    typeof meta.adapterVersion === "string" &&
+    typeof meta.executedAt === "string" &&
+    typeof meta.options === "object" &&
+    meta.options !== null
+  );
+}
+
+function isShortCircuitMetadataBlock(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const sc = value as Record<string, unknown>;
+  if (
+    typeof sc.computePeak !== "boolean" ||
+    typeof sc.computeThermal !== "boolean" ||
+    typeof sc.voltageFactor !== "number" ||
+    !Number.isFinite(sc.voltageFactor as number)
+  ) {
+    return false;
+  }
+  if (
+    typeof sc.calculationCase !== "string" ||
+    !ALLOWED_CALCULATION_CASES.has(sc.calculationCase as ShortCircuitCase)
+  ) {
+    return false;
+  }
+  if (
+    typeof sc.faultType !== "string" ||
+    !ALLOWED_FAULT_TYPES.has(sc.faultType as ShortCircuitFaultType)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isShortCircuitSidecarBusRow(value: unknown): value is ShortCircuitSidecarBusRow {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  if (typeof row.internalId !== "string" || row.internalId.length === 0) return false;
+  if (
+    typeof row.status !== "string" ||
+    !ALLOWED_BUS_ROW_STATUSES.has(row.status as ShortCircuitSidecarBusRowStatus)
+  ) {
+    return false;
+  }
+  for (const field of NUMERIC_BUS_FIELDS) {
+    if (!(field in row) || !isNullableFiniteNumber(row[field])) {
+      return false;
+    }
+  }
+  if ("issueCodes" in row && row.issueCodes !== undefined) {
+    if (!Array.isArray(row.issueCodes)) return false;
+    for (const code of row.issueCodes) {
+      if (typeof code !== "string" || code.length === 0) return false;
+    }
+  }
+  return true;
+}
+
+function isShortCircuitWireIssue(value: unknown): value is ShortCircuitWireIssue {
+  if (typeof value !== "object" || value === null) return false;
+  const issue = value as Record<string, unknown>;
+  if (typeof issue.code !== "string" || issue.code.length === 0) return false;
+  if (typeof issue.message !== "string") return false;
+  if (
+    typeof issue.severity !== "string" ||
+    !ALLOWED_ISSUE_SEVERITIES.has(issue.severity as ShortCircuitIssueSeverity)
+  ) {
+    return false;
+  }
+  if ("internalId" in issue && issue.internalId !== undefined && typeof issue.internalId !== "string") {
+    return false;
+  }
+  if ("field" in issue && issue.field !== undefined && typeof issue.field !== "string") {
+    return false;
+  }
+  return true;
+}
+
 /**
- * Minimal structural check on a `ShortCircuitSidecarResponse`. Field-
- * level normalization lives in PR #4; this guard only rejects
- * payloads that are not even shaped like the wire envelope. Mirrors
- * the Stage 2 `isSolverResult` pattern in `sidecarClient.ts`.
+ * Strict structural check on a `ShortCircuitSidecarResponse`.
  *
- * `metadata` MUST be a non-null object so that PR #4 result
- * normalization can rely on `response.metadata` being defined; a
- * malformed sidecar response is the orchestrator's cue to synthesize
- * an `E-SC-001` issue rather than passing junk downstream.
+ * The orchestrator (PR #4) treats a `false` return as a transport
+ * failure and synthesizes an `E-SC-001` issue rather than passing
+ * malformed data to result normalization, so this guard MUST reject
+ * any wire payload that does not match the contract exactly:
+ *
+ *   - top-level `status` is one of `"succeeded"`,
+ *     `"failed_validation"`, `"failed_solver"`;
+ *   - `metadata` is a Stage 2 `SolverMetadata` shape;
+ *   - `shortCircuit.calculationCase === "maximum"`,
+ *     `shortCircuit.faultType === "threePhase"`,
+ *     `computePeak` / `computeThermal` are booleans, and
+ *     `voltageFactor` is a finite number;
+ *   - every entry of `buses` carries a non-empty string `internalId`,
+ *     a row status from `"valid" | "warning" | "failed"` (the app-side
+ *     `"unavailable"` is orchestrator-synthesized and MUST NOT appear
+ *     on the wire), and `voltageLevelKv` / `ikssKa` / `ipKa` / `ithKa`
+ *     / `skssMva` each present as either a finite number or `null`;
+ *   - every entry of `issues` carries `code: string`,
+ *     `severity: "error" | "warning"`, and `message: string`.
+ *
+ * `issueCodes` on a bus row is the only optional field; when present
+ * it must be an array of non-empty strings.
  */
 export function isShortCircuitSidecarResponse(
   value: unknown,
 ): value is ShortCircuitSidecarResponse {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
+
   if (
     typeof v.status !== "string" ||
-    !Array.isArray(v.buses) ||
-    !Array.isArray(v.issues)
+    !ALLOWED_TOP_LEVEL_STATUSES.has(v.status as ShortCircuitSidecarResponseStatus)
   ) {
     return false;
   }
-  if (typeof v.metadata !== "object" || v.metadata === null) {
-    return false;
+
+  if (!isMetadataShape(v.metadata)) return false;
+  if (!isShortCircuitMetadataBlock(v.shortCircuit)) return false;
+
+  if (!Array.isArray(v.buses)) return false;
+  for (const row of v.buses) {
+    if (!isShortCircuitSidecarBusRow(row)) return false;
   }
-  const meta = v.metadata as Record<string, unknown>;
-  if (
-    typeof meta.solverName !== "string" ||
-    typeof meta.solverVersion !== "string" ||
-    typeof meta.adapterVersion !== "string" ||
-    typeof meta.executedAt !== "string" ||
-    typeof meta.options !== "object" ||
-    meta.options === null
-  ) {
-    return false;
+
+  if (!Array.isArray(v.issues)) return false;
+  for (const issue of v.issues) {
+    if (!isShortCircuitWireIssue(issue)) return false;
   }
-  if (typeof v.shortCircuit !== "object" || v.shortCircuit === null) {
-    return false;
-  }
-  const sc = v.shortCircuit as Record<string, unknown>;
-  return (
-    typeof sc.calculationCase === "string" &&
-    typeof sc.faultType === "string" &&
-    typeof sc.computePeak === "boolean" &&
-    typeof sc.computeThermal === "boolean" &&
-    typeof sc.voltageFactor === "number"
-  );
+
+  return true;
 }

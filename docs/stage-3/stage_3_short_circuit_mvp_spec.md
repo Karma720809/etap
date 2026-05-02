@@ -955,7 +955,8 @@ Load Flow snapshot:
 - Deep copy of the post-override `AppNetwork`.
 - Deep copy of the `SolverInput` sent to the sidecar.
 - `validation: RuntimeValidationSummary` populated from the new
-  `validateForShortCircuit()` wrapper (planned for Stage 3 PR #2).
+  `validateForShortCircuit()` wrapper (planned for Stage 3 PR #4
+  alongside the orchestrator that consumes it).
 - `solver`: name `"pandapower"`, version filled from
   `SolverMetadata.solverVersion` after the run, and the Stage 2
   `SolverOptions` (unchanged).
@@ -1215,26 +1216,49 @@ from this spec.
 - Guardrail check: `git diff --stat` shows only the new spec file
   (and a `docs/stage-3/` directory if previously absent).
 
-### Stage 3 PR #2 — Contract / result types only
+### Stage 3 PR #2 — Contract / wire / input types only
+
+PR #2 is **contract-and-wire-only**. App-normalized result types, the
+runtime bundle, the validation-readiness wrapper, normalization, and
+retention widening all land in PR #4 — see the boundary list below.
 
 - New file: `packages/solver-adapter/src/shortCircuit.ts` carrying
-  `ShortCircuitFaultType`, `ShortCircuitCase`,
+  the **request- and wire-side** surface only:
+  `ShortCircuitFaultType`, `ShortCircuitCase`, `ShortCircuitMode`,
   `ShortCircuitFaultTarget`, `ShortCircuitOptions`,
   `DEFAULT_SHORT_CIRCUIT_OPTIONS`, `ShortCircuitRequest`,
-  `ShortCircuitIssueCode`, `ShortCircuitIssue`,
-  `ShortCircuitBusResult`, `ShortCircuitResult`, and
-  `ShortCircuitRunBundle`.
+  `SHORT_CIRCUIT_COMMAND`, `ShortCircuitErrorCode` /
+  `ShortCircuitWarningCode` / `ShortCircuitIssueCode`,
+  `ShortCircuitIssueSeverity`, `ShortCircuitWireIssue`,
+  `ShortCircuitSidecarBusRowStatus`, `ShortCircuitSidecarBusRow`,
+  `ShortCircuitSidecarMetadataBlock`,
+  `ShortCircuitSidecarResponseStatus`,
+  `ShortCircuitSidecarResponse`, and the strict structural guard
+  `isShortCircuitSidecarResponse()`.
 - Re-export from `packages/solver-adapter/src/index.ts`.
-- New file: `packages/solver-adapter/tests/shortCircuit.contract.test.ts`
+- New file: `packages/solver-adapter/tests/shortCircuitContract.test.ts`
   with structural guards (mirrors the Stage 2 PR #3 contract test
-  pattern) and the negative cases for `E-SC-005` / `E-SC-006`.
-- New `validateForShortCircuit()` wrapper in
-  `packages/validation/src/calcReadiness.ts` (or a sibling file),
-  reusing the Stage 2 readiness output shape.
-- No sidecar changes. No orchestrator. No UI changes. No
-  `calculation-store` changes.
-- Acceptance: AC-S3-04 mapped (types + tests); AC-S3-02 reinforced
-  (no pandapower imports in the new file).
+  pattern), the negative-case rejections required by the strict
+  `isShortCircuitSidecarResponse()` guard (top-level status enum,
+  `shortCircuit` block enums, bus-row status enum and required
+  nullable numerics, issue severity/code/message), and the negative
+  cases for `E-SC-005` / `E-SC-006`.
+- Optional: Python TypedDict mirror of the wire shapes in
+  `services/solver-sidecar/src/contracts.py` so the Python side stays
+  next to the contract. No `run_short_circuit` dispatcher.
+- **Out of scope for PR #2 (move to PR #4):**
+  `ShortCircuitIssue` (app-normalized issue type),
+  `ShortCircuitBusResult`, `ShortCircuitResult`,
+  `ShortCircuitRunBundle`, `validateForShortCircuit()` wrapper,
+  sidecar response → app-normalized projection, and any
+  `calculation-store` retention widening.
+- No sidecar `run_short_circuit` execution. No transport call. No
+  orchestrator. No UI changes. No `calculation-store` changes.
+- Acceptance: AC-S3-03 partially advanced (request envelope and wire
+  response shape defined); AC-S3-02 reinforced (no pandapower imports
+  in the new file). AC-S3-04 graduation (the app-normalized result
+  model) is **deferred to PR #4** because that is where the
+  app-normalized types are introduced.
 
 ### Stage 3 PR #3 — Sidecar `run_short_circuit` command + adapter tests
 
@@ -1255,13 +1279,23 @@ from this spec.
   gated behind `RUN_SIDECAR_INTEGRATION=1`.
 - Acceptance: AC-S3-03 mapped.
 
-### Stage 3 PR #4 — Orchestrator + runtime snapshot / result normalization
+### Stage 3 PR #4 — Orchestrator + app-normalized result types + runtime snapshot / retention widening
 
+PR #4 introduces the app-normalized result model (moved out of PR #2),
+the orchestrator, the validation-readiness wrapper, and the
+`calculation-store` retention widening.
+
+- New file: `packages/solver-adapter/src/shortCircuitResults.ts`
+  carrying the app-normalized result types
+  (`ShortCircuitIssue`, `ShortCircuitBusResult`, `ShortCircuitResult`)
+  and `normalizeShortCircuitResult()` (mirrors `results.ts`).
 - New file: `packages/solver-adapter/src/shortCircuitRunner.ts`
   carrying `runShortCircuitForAppNetwork(appNetwork, options)` and
-  the `ShortCircuitRunBundle` factory (mirrors `loadFlow.ts`).
-- New file: `packages/solver-adapter/src/shortCircuitResults.ts`
-  carrying `normalizeShortCircuitResult()` (mirrors `results.ts`).
+  the `ShortCircuitRunBundle` factory and type (mirrors `loadFlow.ts`).
+- New `validateForShortCircuit()` wrapper in
+  `packages/validation/src/calcReadiness.ts` (or a sibling file),
+  reusing the Stage 2 readiness output shape. Moved from PR #2 to
+  keep the wrapper next to the orchestrator that consumes it.
 - Edit: `packages/calculation-store/src/types.ts` widens
   `CalculationModule` to
   `"load_flow_bundle" | "short_circuit_bundle"` and widens
@@ -1275,8 +1309,10 @@ from this spec.
 - New tests:
   `packages/solver-adapter/tests/shortCircuitRunner.test.ts`,
   `packages/solver-adapter/tests/shortCircuitResults.test.ts`,
-  `packages/calculation-store/tests/short-circuit-retention.test.ts`.
-- Acceptance: AC-S3-05 mapped.
+  `packages/calculation-store/tests/short-circuit-retention.test.ts`,
+  `packages/validation/tests/short-circuit-readiness.test.ts`.
+- Acceptance: AC-S3-04 mapped (app-normalized result model lands
+  here, not in PR #2); AC-S3-05 mapped (runtime-only retention).
 
 ### Stage 3 PR #5 — UI result table + Calculation Status Panel wiring
 
