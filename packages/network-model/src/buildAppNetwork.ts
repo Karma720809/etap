@@ -26,6 +26,7 @@ import {
   type NetworkBus,
   type NetworkCableBranch,
   type NetworkGate,
+  type NetworkGateConnection,
   type NetworkGeneratorPQ,
   type NetworkIssueSeverity,
   type NetworkLoad,
@@ -88,10 +89,6 @@ function pushIssue(collector: IssueCollector, issue: NetworkBuildIssue): void {
   } else {
     collector.warnings.push(issue);
   }
-}
-
-function tagOf(internalId: string, byId: Map<string, { tag: string }>): string {
-  return byId.get(internalId)?.tag ?? internalId;
 }
 
 function tan(pf: number): number {
@@ -550,6 +547,8 @@ interface BranchChainContext {
   cables: Map<string, Cable>;
   breakers: Map<string, Breaker>;
   switches: Map<string, SwitchDevice>;
+  /** All equipment kinds keyed by internalId — used to distinguish E-DIA-004 (missing) from E-DIA-005 (wrong kind). */
+  allEquipmentKinds: Map<string, string>;
   busNodeIdToBusId: Map<string, string>;
 }
 
@@ -560,11 +559,16 @@ function buildBranchChainContext(project: PowerSystemProjectFile): BranchChainCo
   for (const c of project.equipment.cables) cables.set(c.internalId, c);
   for (const b of project.equipment.breakers) breakers.set(b.internalId, b);
   for (const s of project.equipment.switches) switches.set(s.internalId, s);
+  const allEquipmentKinds = new Map<string, string>();
+  const eq = project.equipment;
+  for (const list of [eq.utilities, eq.generators, eq.buses, eq.transformers, eq.cables, eq.breakers, eq.switches, eq.loads, eq.motors, eq.placeholders ?? []]) {
+    for (const item of list) allEquipmentKinds.set(item.internalId, item.kind);
+  }
   const busNodeIdToBusId = new Map<string, string>();
   for (const node of project.diagram.nodes) {
     if (node.kind === "bus") busNodeIdToBusId.set(node.id, node.equipmentInternalId);
   }
-  return { cables, breakers, switches, busNodeIdToBusId };
+  return { cables, breakers, switches, allEquipmentKinds, busNodeIdToBusId };
 }
 
 function convertBranchChainEdge(
@@ -572,8 +576,12 @@ function convertBranchChainEdge(
   ctx: BranchChainContext,
   busIds: Set<string>,
   collector: IssueCollector,
-): { cables: NetworkCableBranch[]; gates: NetworkGate[] } {
-  const out = { cables: [] as NetworkCableBranch[], gates: [] as NetworkGate[] };
+): { cables: NetworkCableBranch[]; gates: NetworkGate[]; gateConnection: NetworkGateConnection | null } {
+  const out = {
+    cables: [] as NetworkCableBranch[],
+    gates: [] as NetworkGate[],
+    gateConnection: null as NetworkGateConnection | null,
+  };
   const upstreamBusId = ctx.busNodeIdToBusId.get(edge.fromNodeId);
   const downstreamBusId = ctx.busNodeIdToBusId.get(edge.toNodeId);
   if (upstreamBusId === undefined || downstreamBusId === undefined) {
@@ -602,9 +610,9 @@ function convertBranchChainEdge(
 
   const ids = edge.branchEquipmentInternalIds ?? [];
 
-  // First pass: classify every member; reject unsupported equipment kinds and
-  // missing references with a blocking issue. This mirrors the Stage 1
-  // E-DIA-005 / E-DIA-004 codes for callers that bypass validateProject.
+  // First pass: classify every member.
+  // - Missing equipment id → E-DIA-004 (Stage 1: missing reference).
+  // - Existing id but unsupported kind → E-DIA-005 (Stage 1: wrong kind in chain).
   type Member =
     | { kind: "cable"; index: number; cable: Cable }
     | { kind: "breaker"; index: number; breaker: Breaker }
@@ -628,14 +636,26 @@ function convertBranchChainEdge(
       members.push({ kind: "switch", index, switchDevice });
       continue;
     }
-    pushIssue(
-      collector,
-      makeIssue({
-        code: "E-DIA-005",
-        diagramEdgeId: edge.id,
-        message: `branch_chain edge '${edge.id}': member '${id}' is missing or not a breaker/cable/switch`,
-      }),
-    );
+    const existingKind = ctx.allEquipmentKinds.get(id);
+    if (existingKind === undefined) {
+      pushIssue(
+        collector,
+        makeIssue({
+          code: "E-DIA-004",
+          diagramEdgeId: edge.id,
+          message: `branch_chain edge '${edge.id}': member '${id}' is not a known equipment internalId`,
+        }),
+      );
+    } else {
+      pushIssue(
+        collector,
+        makeIssue({
+          code: "E-DIA-005",
+          diagramEdgeId: edge.id,
+          message: `branch_chain edge '${edge.id}': member '${id}' has kind '${existingKind}'; only breaker/cable/switch are valid branch_chain members`,
+        }),
+      );
+    }
     pathBlocked = true;
   }
   if (pathBlocked) return out;
@@ -667,6 +687,9 @@ function convertBranchChainEdge(
     // any downstream consequences.
     return out;
   }
+
+  const hasCable = members.some((m) => m.kind === "cable");
+  const gateOnlyChain = !hasCable && members.length > 0;
 
   for (const m of members) {
     if (m.kind === "cable") {
@@ -725,6 +748,21 @@ function convertBranchChainEdge(
       });
     }
   }
+
+  if (gateOnlyChain) {
+    // Spec §5.6: an enabled gate-only branch_chain collapses to a direct
+    // bus↔bus connection. Record it for topology reachability; floating-bus
+    // detection treats it as an adjacency link. No NetworkCableBranch is
+    // created — this connection carries zero impedance and must not be
+    // modeled as a solver line element.
+    out.gateConnection = {
+      fromBusInternalId: upstreamBusId,
+      toBusInternalId: downstreamBusId,
+      branchChainEdgeId: edge.id,
+      gateInternalIds: members.map((m) => (m.kind === "breaker" ? m.breaker.internalId : m.kind === "switch" ? m.switchDevice.internalId : "")),
+    };
+  }
+
   return out;
 }
 
@@ -732,17 +770,19 @@ function convertBranchChains(
   project: PowerSystemProjectFile,
   busIds: Set<string>,
   collector: IssueCollector,
-): { cables: NetworkCableBranch[]; gates: NetworkGate[] } {
+): { cables: NetworkCableBranch[]; gates: NetworkGate[]; gateConnections: NetworkGateConnection[] } {
   const ctx = buildBranchChainContext(project);
   const cables: NetworkCableBranch[] = [];
   const gates: NetworkGate[] = [];
+  const gateConnections: NetworkGateConnection[] = [];
   for (const edge of project.diagram.edges) {
     if (edge.kind !== "branch_chain") continue;
     const result = convertBranchChainEdge(edge, ctx, busIds, collector);
     cables.push(...result.cables);
     gates.push(...result.gates);
+    if (result.gateConnection !== null) gateConnections.push(result.gateConnection);
   }
-  return { cables, gates };
+  return { cables, gates, gateConnections };
 }
 
 function collectLoadsAndMotors(
@@ -847,6 +887,7 @@ function detectFloatingBuses(
   sources: NetworkSource[],
   transformers: NetworkTransformerBranch[],
   cables: NetworkCableBranch[],
+  gateConnections: NetworkGateConnection[],
   collector: IssueCollector,
 ): void {
   if (buses.length === 0 || sources.length === 0) return;
@@ -858,6 +899,8 @@ function detectFloatingBuses(
   }
   for (const t of transformers) link(t.fromBusInternalId, t.toBusInternalId);
   for (const c of cables) link(c.fromBusInternalId, c.toBusInternalId);
+  // Spec §5.6 — enabled gate-only branch_chains tie endpoints electrically.
+  for (const gc of gateConnections) link(gc.fromBusInternalId, gc.toBusInternalId);
 
   const seeds = new Set<string>();
   for (const s of sources) seeds.add(s.busInternalId);
@@ -905,9 +948,9 @@ export function buildAppNetwork(project: PowerSystemProjectFile): NetworkBuildRe
   const { buses, busIds } = collectBuses(project, collector);
   const { sources, generators, sourceEdges } = collectSources(project, busIds, collector);
   const { transformers, transformerEdges } = collectTransformers(project, busIds, collector);
-  const { cables, gates } = convertBranchChains(project, busIds, collector);
+  const { cables, gates, gateConnections } = convertBranchChains(project, busIds, collector);
   const { loads, motors, loadEdges } = collectLoadsAndMotors(project, busIds, collector);
-  detectFloatingBuses(buses, sources, transformers, cables, collector);
+  detectFloatingBuses(buses, sources, transformers, cables, gateConnections, collector);
 
   const topologyEdges: NetworkTopologyEdge[] = [
     ...sourceEdges,
@@ -919,14 +962,14 @@ export function buildAppNetwork(project: PowerSystemProjectFile): NetworkBuildRe
   if (status === "invalid") {
     return {
       status: "invalid",
-      network: null,
+      appNetwork: null,
       issues: collector.errors,
       warnings: collector.warnings,
     };
   }
 
   const scenarioId = project.scenarios[0]?.scenarioId ?? null;
-  const network: AppNetwork = {
+  const appNetwork: AppNetwork = {
     networkModelVersion: NETWORK_MODEL_VERSION,
     scenarioId,
     frequencyHz: project.project.frequencyHz,
@@ -936,6 +979,7 @@ export function buildAppNetwork(project: PowerSystemProjectFile): NetworkBuildRe
     transformers,
     cables,
     gates,
+    gateConnections,
     loads,
     motors,
     topologyEdges,
@@ -943,7 +987,7 @@ export function buildAppNetwork(project: PowerSystemProjectFile): NetworkBuildRe
 
   return {
     status: "valid",
-    network,
+    appNetwork,
     issues: [],
     warnings: collector.warnings,
   };

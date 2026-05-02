@@ -6,9 +6,9 @@ describe("buildAppNetwork — branch_chain conversion (S2-OQ-01..03)", () => {
   it("includes the cable branch when [BRK closed, CBL] is fully enabled", () => {
     const result = buildAppNetwork(minimalValidProject());
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    const cables = result.network.cables;
-    const gates = result.network.gates;
+    if (result.appNetwork === null) return;
+    const cables = result.appNetwork.cables;
+    const gates = result.appNetwork.gates;
     expect(cables).toHaveLength(1);
     expect(gates).toHaveLength(1);
     expect(gates[0]?.kind).toBe("breaker");
@@ -20,7 +20,7 @@ describe("buildAppNetwork — branch_chain conversion (S2-OQ-01..03)", () => {
     project.equipment.breakers[0]!.state = "open";
     const result = buildAppNetwork(project);
     // Source still valid; downstream motor terminal bus becomes floating.
-    expect(result.network).toBeNull();
+    expect(result.appNetwork).toBeNull();
     expect(result.issues.some((i) => i.code === "E-NET-002" && i.equipmentInternalId === "eq_bus_mtr")).toBe(true);
     // No cable record was emitted; we cannot inspect it directly when the
     // build is invalid, but the floating-bus diagnostic confirms the path was
@@ -31,7 +31,7 @@ describe("buildAppNetwork — branch_chain conversion (S2-OQ-01..03)", () => {
     const project = minimalValidProject();
     project.equipment.breakers[0]!.status = "out_of_service";
     const result = buildAppNetwork(project);
-    expect(result.network).toBeNull();
+    expect(result.appNetwork).toBeNull();
     expect(result.issues.some((i) => i.code === "E-NET-002")).toBe(true);
   });
 
@@ -39,7 +39,7 @@ describe("buildAppNetwork — branch_chain conversion (S2-OQ-01..03)", () => {
     const project = minimalValidProject();
     project.equipment.cables[0]!.status = "out_of_service";
     const result = buildAppNetwork(project);
-    expect(result.network).toBeNull();
+    expect(result.appNetwork).toBeNull();
     expect(result.issues.some((i) => i.code === "E-NET-002")).toBe(true);
   });
 
@@ -61,10 +61,10 @@ describe("buildAppNetwork — branch_chain conversion (S2-OQ-01..03)", () => {
     });
     const result = buildAppNetwork(project);
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    expect(result.network.cables[0]?.branchChainOrderIndex).toBe(2);
-    expect(result.network.gates.find((g) => g.internalId === "eq_sw_1")?.branchChainOrderIndex).toBe(0);
-    expect(result.network.gates.find((g) => g.internalId === "eq_brk_1")?.branchChainOrderIndex).toBe(1);
+    if (result.appNetwork === null) return;
+    expect(result.appNetwork.cables[0]?.branchChainOrderIndex).toBe(2);
+    expect(result.appNetwork.gates.find((g) => g.internalId === "eq_sw_1")?.branchChainOrderIndex).toBe(0);
+    expect(result.appNetwork.gates.find((g) => g.internalId === "eq_brk_1")?.branchChainOrderIndex).toBe(1);
   });
 
   it("emits W-NET-001 when a cable's fromBus/toBus disagrees with the chain endpoints", () => {
@@ -115,7 +115,7 @@ describe("buildAppNetwork — gate fan-out", () => {
       });
     });
     const result = buildAppNetwork(project);
-    expect(result.network).toBeNull();
+    expect(result.appNetwork).toBeNull();
     expect(result.issues.some((i) => i.code === "E-NET-002")).toBe(true);
   });
 
@@ -126,9 +126,9 @@ describe("buildAppNetwork — gate fan-out", () => {
     // No additional chains here — verify the baseline indices are correct.
     const result = buildAppNetwork(project);
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    expect(result.network.cables[0]?.branchChainOrderIndex).toBe(1);
-    expect(result.network.gates[0]?.branchChainOrderIndex).toBe(0);
+    if (result.appNetwork === null) return;
+    expect(result.appNetwork.cables[0]?.branchChainOrderIndex).toBe(1);
+    expect(result.appNetwork.gates[0]?.branchChainOrderIndex).toBe(0);
   });
 });
 

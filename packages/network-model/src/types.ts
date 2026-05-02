@@ -196,6 +196,24 @@ export interface NetworkTopologyEdge {
   equipmentInternalId: string;
 }
 
+/**
+ * Bus↔bus reachability tie produced by an enabled gate-only `branch_chain`
+ * (per Stage 2 spec §5.6 — no cable, no transformer, only closed/in-service
+ * breakers and switches). The connection collapses to a direct topological
+ * link between the two endpoints. It carries zero impedance; the solver must
+ * not treat it as a line/branch element. PR #2 surfaces it for floating-bus
+ * reachability and traceability only; merging the two `NetworkBus` records
+ * into a single solver bus is deferred to a later Stage 2 PR.
+ */
+export interface NetworkGateConnection {
+  fromBusInternalId: string;
+  toBusInternalId: string;
+  /** Diagram branch_chain edge that produced this connection. */
+  branchChainEdgeId: string;
+  /** Ordered breaker / switch internalIds taken from `branchEquipmentInternalIds`. */
+  gateInternalIds: string[];
+}
+
 export interface AppNetwork {
   /**
    * Monotonic version of the AppNetwork shape. Ticks when the in-memory model
@@ -220,6 +238,12 @@ export interface AppNetwork {
    * zero impedance to any solver and are never required for Stage 2 PR #2.
    */
   gates: NetworkGate[];
+  /**
+   * Direct bus↔bus ties produced by enabled gate-only branch_chains (spec §5.6).
+   * These carry zero impedance and are used by topology reachability checks
+   * (e.g., floating-bus detection) but never as solver impedance elements.
+   */
+  gateConnections: NetworkGateConnection[];
   loads: NetworkLoad[];
   motors: NetworkMotor[];
   /** Topology edges resolved during build (sources, loads, motors, transformer node→branch). */
@@ -227,12 +251,17 @@ export interface AppNetwork {
 }
 
 /**
- * Result of `buildAppNetwork()`. `network` is non-null iff `status === "valid"`
- * (i.e., no `error`-severity issue was raised).
+ * Result of `buildAppNetwork()`. `appNetwork` is non-null iff
+ * `status === "valid"` (i.e., no `error`-severity issue was raised).
+ *
+ * The field name follows the Stage 2 spec §4 (`appNetwork`). `issues` collects
+ * blocking errors and `warnings` collects non-blocking diagnostics; the spec's
+ * single mixed-severity `issues` view can be derived as
+ * `[...issues, ...warnings]` if needed.
  */
 export interface NetworkBuildResult {
   status: NetworkBuildStatus;
-  network: AppNetwork | null;
+  appNetwork: AppNetwork | null;
   /** Blocking issues (severity "error"). Non-empty implies `status === "invalid"`. */
   issues: NetworkBuildIssue[];
   /** Non-blocking warnings and info diagnostics raised during build. */

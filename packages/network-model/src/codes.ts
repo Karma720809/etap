@@ -32,6 +32,7 @@ export type NetworkBuildCode =
   | "E-EQ-003"
   | "E-EQ-004"
   | "E-EQ-005"
+  | "E-DIA-004"
   | "E-DIA-005"
   | "W-NET-001"
   | "W-GEN-001"
@@ -47,6 +48,7 @@ export const NETWORK_BUILD_CODES: Record<NetworkBuildCode, { severity: NetworkIs
   "E-EQ-003": { severity: "error", message: "Transformer fromBus and toBus must be different existing buses" },
   "E-EQ-004": { severity: "error", message: "Cable fromBus and toBus must be different existing buses" },
   "E-EQ-005": { severity: "error", message: "Breaker/switch fromBus and toBus must be different existing buses" },
+  "E-DIA-004": { severity: "error", message: "branch_chain edge references missing equipment internalId" },
   "E-DIA-005": { severity: "error", message: "branch_chain equipment is not a breaker, cable, or switch" },
   "W-NET-001": { severity: "warning", message: "Branch chain endpoint nodes disagree with the contained equipment fromBus/toBus" },
   "W-GEN-001": { severity: "warning", message: "Generator operating mode is not supported by Stage 2 Load Flow" },

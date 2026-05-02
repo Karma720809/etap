@@ -6,8 +6,8 @@ describe("buildAppNetwork — source / slack policy (S2-OQ source rules)", () =>
   it("accepts exactly one in-service utility as the slack", () => {
     const result = buildAppNetwork(minimalValidProject());
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    const slacks = result.network.sources.filter((s) => s.role === "slack");
+    if (result.appNetwork === null) return;
+    const slacks = result.appNetwork.sources.filter((s) => s.role === "slack");
     expect(slacks).toHaveLength(1);
     expect(slacks[0]?.internalId).toBe("eq_util_1");
   });
@@ -45,12 +45,12 @@ describe("buildAppNetwork — source / slack policy (S2-OQ source rules)", () =>
     ];
     const result = buildAppNetwork(project);
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    expect(result.network.generators).toHaveLength(1);
-    expect(result.network.generators[0]?.busInternalId).toBe("eq_bus_lv");
-    expect(result.network.generators[0]?.pMw).toBe(0.5);
+    if (result.appNetwork === null) return;
+    expect(result.appNetwork.generators).toHaveLength(1);
+    expect(result.appNetwork.generators[0]?.busInternalId).toBe("eq_bus_lv");
+    expect(result.appNetwork.generators[0]?.pMw).toBe(0.5);
 
-    const sources = result.network.sources;
+    const sources = result.appNetwork.sources;
     expect(sources.find((s) => s.kind === "generator_pq")?.role).toBe("pq");
     expect(sources.find((s) => s.kind === "utility")?.role).toBe("slack");
   });
@@ -102,7 +102,7 @@ describe("buildAppNetwork — source / slack policy (S2-OQ source rules)", () =>
     ];
     const result = buildAppNetwork(project);
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    expect(result.network.generators).toHaveLength(0);
+    if (result.appNetwork === null) return;
+    expect(result.appNetwork.generators).toHaveLength(0);
   });
 });

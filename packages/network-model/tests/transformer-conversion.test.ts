@@ -14,8 +14,8 @@ describe("buildAppNetwork — transformer-as-node conversion (S2-OQ-04)", () => 
   it("converts a transformer node with two bus connections into NetworkTransformerBranch", () => {
     const result = buildAppNetwork(minimalValidProject());
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    const t = result.network.transformers[0];
+    if (result.appNetwork === null) return;
+    const t = result.appNetwork.transformers[0];
     expect(t).toBeDefined();
     expect(t?.internalId).toBe("eq_tr_1");
     expect(t?.fromBusInternalId).toBe("eq_bus_mv");
@@ -64,7 +64,7 @@ describe("buildAppNetwork — transformer-as-node conversion (S2-OQ-04)", () => 
     const project = minimalValidProject();
     project.equipment.transformers[0]!.status = "out_of_service";
     const result = buildAppNetwork(project);
-    expect(result.network).toBeNull();
+    expect(result.appNetwork).toBeNull();
     // Both LV and motor terminal buses become unreachable — E-NET-002.
     const floating = result.issues.filter((i) => i.code === "E-NET-002").map((i) => i.equipmentInternalId);
     expect(floating).toEqual(expect.arrayContaining(["eq_bus_lv", "eq_bus_mtr"]));

@@ -6,9 +6,9 @@ describe("buildAppNetwork — loads and motors", () => {
   it("collects in-service motors as steady-state PQ loads", () => {
     const result = buildAppNetwork(minimalValidProject());
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    expect(result.network.motors).toHaveLength(1);
-    const m = result.network.motors[0]!;
+    if (result.appNetwork === null) return;
+    expect(result.appNetwork.motors).toHaveLength(1);
+    const m = result.appNetwork.motors[0]!;
     expect(m.busInternalId).toBe("eq_bus_mtr");
     // pMw should be ratedKw / efficiency / 1000 = 250 / 0.95 / 1000 ≈ 0.2632
     expect(m.pMw).toBeCloseTo(250 / 0.95 / 1000, 6);
@@ -23,9 +23,9 @@ describe("buildAppNetwork — loads and motors", () => {
     ];
     const result = buildAppNetwork(project);
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    const ld1 = result.network.loads.find((l) => l.internalId === "eq_ld_1")!;
-    const ld2 = result.network.loads.find((l) => l.internalId === "eq_ld_2")!;
+    if (result.appNetwork === null) return;
+    const ld1 = result.appNetwork.loads.find((l) => l.internalId === "eq_ld_1")!;
+    const ld2 = result.appNetwork.loads.find((l) => l.internalId === "eq_ld_2")!;
     expect(ld1.pMw).toBeCloseTo(0.1, 6);
     expect(ld1.qMvar).toBeCloseTo(0.03, 6);
     expect(ld2.pMw).toBeCloseTo(0.2, 6);
@@ -41,9 +41,9 @@ describe("buildAppNetwork — loads and motors", () => {
     project.equipment.motors[0]!.status = "out_of_service";
     const result = buildAppNetwork(project);
     expect(result.status).toBe("valid");
-    if (result.network === null) return;
-    expect(result.network.loads).toHaveLength(0);
-    expect(result.network.motors).toHaveLength(0);
+    if (result.appNetwork === null) return;
+    expect(result.appNetwork.loads).toHaveLength(0);
+    expect(result.appNetwork.motors).toHaveLength(0);
   });
 
   it("emits E-NET-003 when a load points at a non-existent bus", () => {
@@ -74,8 +74,8 @@ describe("buildAppNetwork — immutability and guardrails", () => {
 
   it("does not introduce any pandapower-named fields on the AppNetwork", () => {
     const result = buildAppNetwork(minimalValidProject());
-    if (result.network === null) return;
-    const json = JSON.stringify(result.network);
+    if (result.appNetwork === null) return;
+    const json = JSON.stringify(result.appNetwork);
     expect(json.toLowerCase()).not.toContain("pandapower");
     expect(json).not.toContain('"bus":'); // PRD §8 illustrative name guardrail
     expect(json).not.toContain('"inService"');
