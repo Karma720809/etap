@@ -178,7 +178,7 @@ one), sends `SolverInput` JSON, and reads back `SolverResult` JSON.
 
 ## 5. Version pinning plan
 
-- pandapower is pinned exactly (`pandapower==X.Y.Z`) in
+- pandapower will be pinned exactly before real solver execution is introduced (`pandapower==X.Y.Z`) in
   `services/solver-sidecar/requirements.txt` (or `pyproject.toml`
   when a build backend is added in PR #4).
 - The exact version string is reported on every response in
