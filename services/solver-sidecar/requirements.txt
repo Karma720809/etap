@@ -1,16 +1,33 @@
-# Stage 2 PR #3 — sidecar skeleton.
+# Stage 2 PR #4 — solver sidecar dependencies.
 #
-# pandapower is intentionally NOT pinned in this PR. The hosting
-# decision (S2-FU-01) selects pandapower as the solver, and it will be
-# pinned exactly in Stage 2 PR #4 alongside the actual transport
-# wiring. PR #3 ships only the contract mirror and a health smoke
-# command — both of which run on a stock CPython install with no
-# scientific stack.
+# pandapower is pinned exactly per S2-FU-05 (spec §16) and the hosting
+# decision §5: a solver upgrade requires updating this pin and rerunning
+# every verified Golden Case. The pinned version string is also reported
+# back to the TypeScript adapter via `SolverMetadata.solverVersion` on
+# every Load Flow run.
 #
-# When PR #4 lands, this file will pin:
-#   pandapower==<X.Y.Z>
-#   numpy==<...>
-#   scipy==<...>
-# (or the equivalent declarations under a pyproject.toml build
-# backend). The chosen version is reported back to the TypeScript
-# adapter via `SolverMetadata.solverVersion`.
+# Choice rationale (see solver-sidecar README):
+#   - `pandapower==2.14.10` is the most recent stable release on the 2.14
+#     long-term line that publishes a matching `pandapower.__version__`
+#     string (the 2.14.11 wheel on PyPI ships an unbumped __version__,
+#     so callers that read `SolverMetadata.solverVersion` would see a
+#     value that drifts from the pin — pinning 2.14.10 keeps the pin and
+#     the runtime-reported version aligned). The 2.14 line keeps the
+#     same `runpp` / `create_*_from_parameters` API used by the sidecar
+#     adapter and is well-exercised against numpy 1.x / scipy 1.x.
+#   - numpy / scipy / pandas are pinned to ranges pandapower 2.14
+#     supports. They are the transitive scientific stack; pandapower
+#     itself is the only library whose exact version is part of the
+#     adapter contract (`SolverMetadata.solverVersion`).
+#
+# To upgrade pandapower:
+#   1. Bump the pin below.
+#   2. Re-run every `verified` Stage 2 Golden Case and refresh
+#      reference data if needed (spec §S2-OQ-07).
+#   3. Note the new version in the sidecar README and the next PR
+#      summary.
+
+pandapower==2.14.10
+numpy>=1.24,<2.0
+scipy>=1.11,<2.0
+pandas>=2.0,<3.0
