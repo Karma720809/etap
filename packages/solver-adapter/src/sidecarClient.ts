@@ -267,17 +267,37 @@ export function isSidecarHealth(value: unknown): value is SidecarHealth {
 /**
  * Minimal structural check on a SolverResult. Field-level normalization
  * lives in `results.ts`; this guard only rejects payloads that are not
- * even shaped like a `SolverResult` (e.g., raw error strings, plain
- * arrays, or missing the required arrays).
+ * even shaped like a `SolverResult`.
+ *
+ * Stage 2 PR #4 review blocker 1 hardening: `metadata` is REQUIRED to
+ * be an object (not null, not missing). A response with `metadata:
+ * null` would later crash result normalization, so the transport layer
+ * rejects it and the orchestrator converts the rejection into a
+ * structured `E-LF-004` issue rather than letting the bad shape reach
+ * normalization.
  */
 export function isSolverResult(value: unknown): value is SolverResult {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
+  if (
+    typeof v.status !== "string" ||
+    typeof v.converged !== "boolean" ||
+    !Array.isArray(v.buses) ||
+    !Array.isArray(v.branches) ||
+    !Array.isArray(v.issues)
+  ) {
+    return false;
+  }
+  if (typeof v.metadata !== "object" || v.metadata === null) {
+    return false;
+  }
+  const meta = v.metadata as Record<string, unknown>;
   return (
-    typeof v.status === "string" &&
-    typeof v.converged === "boolean" &&
-    Array.isArray(v.buses) &&
-    Array.isArray(v.branches) &&
-    Array.isArray(v.issues)
+    typeof meta.solverName === "string" &&
+    typeof meta.solverVersion === "string" &&
+    typeof meta.adapterVersion === "string" &&
+    typeof meta.executedAt === "string" &&
+    typeof meta.options === "object" &&
+    meta.options !== null
   );
 }

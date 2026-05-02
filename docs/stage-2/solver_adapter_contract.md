@@ -320,11 +320,20 @@ the sidecar; the wire format always uses `internalId`.
   (`packages/solver-adapter/src/runtimeSnapshot.ts`). Per spec §10 /
   S2-OQ-06 these are NEVER serialized into the Stage 1 canonical
   project file; the project file's `calculationSnapshots` array
-  remains empty in every Stage 2 PR.
+  remains empty in every Stage 2 PR. The snapshot deep-clones the
+  AppNetwork and SolverInput (review blocker 2) so later mutation of
+  the caller's structures cannot change the snapshot, and it carries
+  a `RuntimeValidationSummary` recording the readiness signal that
+  authorized the run.
 - Orchestrator `runLoadFlowForAppNetwork(...)`
   (`packages/solver-adapter/src/loadFlow.ts`) tying the steps
-  together. Pre-flight short-circuits (no buses, no slack) avoid
-  spawning the sidecar for unsolvable inputs.
+  together. Pre-flight short-circuits (no buses, no slack, multi-slack)
+  avoid spawning the sidecar for unsolvable inputs.
+- `LoadFlowRunBundle` returned by the orchestrator carries
+  `loadFlow` (the runtime `LoadFlowResult`) AND `voltageDrop: null`,
+  matching the spec §S2-OQ-05 bundle shape ahead of the actual
+  Voltage Drop derivation in PR #5. Adding the field now avoids a
+  type widening in PR #5.
 - Unit tests for transport, normalization, and orchestrator.
 - Opt-in integration test (`tests/loadFlow.integration.test.ts`)
   gated behind `RUN_SIDECAR_INTEGRATION=1` that exercises the full
@@ -333,6 +342,14 @@ the sidecar; the wire format always uses `internalId`.
 ### 5.3 Does not ship (still deferred)
 
 - Voltage Drop derivation — Stage 2 PR #5.
+- Splitting `RuntimeCalculationSnapshot` and `LoadFlowResult` out
+  into a dedicated `packages/calculation-store` package. The Stage 2
+  spec §8.1 / §16 plans for these types to live alongside the
+  retention store in PR #6. PR #4 keeps them in
+  `packages/solver-adapter` because no downstream consumer requires
+  the package split yet, and creating an empty package would only
+  add churn. The split is tracked as a non-blocking follow-up to
+  Stage 2 PR #6.
 - UI result tables / diagram overlay — Stage 2 PR #5.
 - Daemon / long-running sidecar / FastAPI transport — deferred.
 - Disk persistence of runtime snapshots / results — deferred

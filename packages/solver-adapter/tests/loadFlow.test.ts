@@ -288,7 +288,11 @@ describe("runLoadFlowForAppNetwork — happy path", () => {
     expect(bundle.snapshot.snapshotId).toBe(bundle.result.runtimeSnapshotId);
     expect(bundle.snapshot.scenarioId).toBe("SCN-N");
     expect(bundle.snapshot.projectId).toBe("PJT-T");
-    expect(bundle.snapshot.appNetwork).toBe(appNetwork);
+    // Stage 2 PR #4 review blocker 2: the snapshot stores the
+    // AppNetwork by VALUE, not by reference. The cloned content must
+    // equal the original but must not be the same object.
+    expect(bundle.snapshot.appNetwork).not.toBe(appNetwork);
+    expect(bundle.snapshot.appNetwork).toEqual(appNetwork);
     expect(bundle.snapshot.solver.name).toBe("pandapower");
     expect(bundle.snapshot.solver.version).toBe("fake-2.14.11");
     expect(bundle.snapshot.solver.options.enforceQLim).toBe(false);
@@ -368,6 +372,43 @@ describe("runLoadFlowForAppNetwork — pre-flight short-circuit", () => {
     expect(bundle.result.issues[0]?.code).toBe("E-LF-005");
   });
 
+  it("does NOT call the transport when the AppNetwork has multiple slack sources", async () => {
+    // Spec §6.2 / S2-FU-03 defer multi-utility / multi-slack handling.
+    // Pre-flight short-circuits to E-LF-005 without spawning Python.
+    const multiSlack: AppNetwork = {
+      networkModelVersion: NETWORK_MODEL_VERSION,
+      scenarioId: null,
+      frequencyHz: 60,
+      buses: [
+        { internalId: "eq_bus_a", tag: "BUS-A", vnKv: 6.6, topology: "3P3W", minVoltagePct: null, maxVoltagePct: null },
+        { internalId: "eq_bus_b", tag: "BUS-B", vnKv: 6.6, topology: "3P3W", minVoltagePct: null, maxVoltagePct: null },
+      ],
+      sources: [
+        { internalId: "eq_util_1", tag: "U1", kind: "utility", busInternalId: "eq_bus_a", vnKv: 6.6, scLevelMva: 250, faultCurrentKa: null, xrRatio: 10, voltageFactor: 1, role: "slack", pMw: null, qMvar: null },
+        { internalId: "eq_util_2", tag: "U2", kind: "utility", busInternalId: "eq_bus_b", vnKv: 6.6, scLevelMva: 250, faultCurrentKa: null, xrRatio: 10, voltageFactor: 1, role: "slack", pMw: null, qMvar: null },
+      ],
+      generators: [],
+      transformers: [],
+      cables: [],
+      gates: [],
+      gateConnections: [],
+      loads: [],
+      motors: [],
+      topologyEdges: [],
+    };
+    const transport = new StubTransport(fakeSuccessSolverResult);
+
+    const bundle = await runLoadFlowForAppNetwork(multiSlack, { transport });
+
+    expect(transport.callCount).toBe(0);
+    expect(bundle.result.status).toBe("failed");
+    expect(bundle.result.issues[0]?.code).toBe("E-LF-005");
+    // Snapshot still records the validation summary that authorized
+    // (or in this case blocked) the run.
+    expect(bundle.snapshot.validation.status).toBe("blocked_by_validation");
+    expect(bundle.snapshot.validation.issues[0]?.code).toBe("E-LF-005");
+  });
+
   it("does NOT call the transport when the AppNetwork has no slack source", async () => {
     const noSlack: AppNetwork = {
       networkModelVersion: NETWORK_MODEL_VERSION,
@@ -408,6 +449,37 @@ describe("runLoadFlowForAppNetwork — pre-flight short-circuit", () => {
 // ---------------------------------------------------------------------------
 
 describe("runLoadFlowForAppNetwork — transport failure", () => {
+  it("converts a metadata-null sidecar response into a structured E-LF-004 (review blocker 1)", async () => {
+    // The transport guard rejects metadata-null responses; the
+    // orchestrator must catch the rejection and emit a real
+    // LoadFlowResult with metadata + an E-LF-004 issue, rather than
+    // throwing or crashing in normalization.
+    const project = minimalProject();
+    const appNetwork = appNetworkOrThrow(project);
+    const transport = new StubTransport(() => {
+      throw new SidecarTransportError(
+        "solver sidecar response did not match SolverResult shape",
+        { exitCode: 0, stdout: "{}", stderr: "" },
+      );
+    });
+
+    const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
+
+    expect(bundle.result.status).toBe("failed");
+    expect(bundle.result.issues[0]?.code).toBe("E-LF-004");
+    // Metadata is always present, never null — both for downstream
+    // consumers and for type safety.
+    expect(bundle.result.metadata).toBeDefined();
+    expect(bundle.result.metadata.solverName).toBe("pandapower");
+    expect(bundle.result.metadata.adapterVersion).toBeTypeOf("string");
+    // No fabricated numbers.
+    expect(bundle.result.busResults).toEqual([]);
+    expect(bundle.result.branchResults).toEqual([]);
+    expect(bundle.result.totalGenerationMw).toBe(0);
+    expect(bundle.result.totalLoadMw).toBe(0);
+    expect(bundle.result.totalLossesMw).toBe(0);
+  });
+
   it("maps SidecarTransportError to E-LF-004 without inventing voltages", async () => {
     const project = minimalProject();
     const appNetwork = appNetworkOrThrow(project);
@@ -446,6 +518,40 @@ describe("runLoadFlowForAppNetwork — transport failure", () => {
 // ---------------------------------------------------------------------------
 // Snapshot identity
 // ---------------------------------------------------------------------------
+
+describe("runLoadFlowForAppNetwork — bundle shape", () => {
+  it("returns voltageDrop: null on the bundle (spec §S2-OQ-05)", async () => {
+    const project = minimalProject();
+    const appNetwork = appNetworkOrThrow(project);
+    const transport = new StubTransport(fakeSuccessSolverResult);
+
+    const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
+
+    expect(bundle.voltageDrop).toBeNull();
+    // Property is present (not undefined) so consumers can rely on it.
+    expect("voltageDrop" in bundle).toBe(true);
+  });
+
+  it("includes runtime totals, per-row status, and a non-null metadata object on the result", async () => {
+    const project = minimalProject();
+    const appNetwork = appNetworkOrThrow(project);
+    const transport = new StubTransport(fakeSuccessSolverResult);
+
+    const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
+
+    expect(bundle.result.metadata).toBeDefined();
+    expect(bundle.result.metadata.solverName).toBe("pandapower");
+    expect(typeof bundle.result.totalGenerationMw).toBe("number");
+    expect(typeof bundle.result.totalLoadMw).toBe("number");
+    expect(typeof bundle.result.totalLossesMw).toBe("number");
+    for (const bus of bundle.result.busResults) {
+      expect(bus.status).toBeDefined();
+    }
+    for (const br of bundle.result.branchResults) {
+      expect(br.status).toBeDefined();
+    }
+  });
+});
 
 describe("runLoadFlowForAppNetwork — snapshot identity", () => {
   it("two runs produce different snapshotIds and different resultIds", async () => {

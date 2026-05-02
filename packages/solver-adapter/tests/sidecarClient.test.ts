@@ -219,6 +219,39 @@ printf 'not json at all'
     );
   });
 
+  it("throws SidecarTransportError when stdout JSON has metadata=null (review blocker 1)", async () => {
+    // Stage 2 PR #4 review blocker 1: a SolverResult with `metadata:
+    // null` would later crash `normalizeSolverResult`. The transport
+    // guard rejects it so the orchestrator can convert the rejection
+    // into a structured `E-LF-004` failure instead of letting the bad
+    // shape reach normalization.
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '{"status":"failed_validation","converged":false,"metadata":null,"buses":[],"branches":[],"issues":[{"code":"E-LF-005","severity":"error","message":"x"}]}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    await expect(transport.runLoadFlow(minimalSolverInput())).rejects.toBeInstanceOf(
+      SidecarTransportError,
+    );
+  });
+
+  it("throws SidecarTransportError when stdout JSON metadata is missing required fields", async () => {
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '{"status":"failed_solver","converged":false,"metadata":{"solverName":"pandapower"},"buses":[],"branches":[],"issues":[]}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    await expect(transport.runLoadFlow(minimalSolverInput())).rejects.toBeInstanceOf(
+      SidecarTransportError,
+    );
+  });
+
   it("throws SidecarTransportError when stdout JSON is missing required fields", async () => {
     const fake = makeFakeSidecar(
       `#!/bin/bash

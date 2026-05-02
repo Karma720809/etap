@@ -41,6 +41,8 @@ import json
 import sys
 from typing import Any, Dict, List, TypedDict
 
+import datetime
+
 from contracts import SIDECAR_NAME, SIDECAR_VERSION, SOLVER_INPUT_VERSION
 
 
@@ -86,6 +88,50 @@ def _emit(payload: Dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
+def _utc_now_iso() -> str:
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _default_solver_options() -> Dict[str, Any]:
+    """Solver-options shape stamped on responses produced before the
+    request body is parsed (e.g., malformed JSON). Mirrors
+    ``DEFAULT_SOLVER_OPTIONS`` on the TypeScript side."""
+
+    return {
+        "algorithm": "nr",
+        "tolerance": 1e-8,
+        "maxIter": 50,
+        "enforceQLim": False,
+    }
+
+
+def _stub_metadata() -> Dict[str, Any]:
+    """Build a structurally valid ``SolverMetadata`` for failure paths
+    that occurred before the request was parsed.
+
+    Stage 2 PR #4 review blocker 1: every response must include a real
+    metadata object so the TypeScript side can rely on
+    ``solverResult.metadata`` being non-null. The values reported here
+    reflect what the sidecar can honestly state without having seen a
+    request: solver/adapter version, options defaults, and timestamp.
+    """
+
+    return {
+        "solverName": "pandapower",
+        "solverVersion": _detect_pandapower_version(),
+        "adapterVersion": SIDECAR_VERSION,
+        "options": _default_solver_options(),
+        "executedAt": _utc_now_iso(),
+        "inputHash": None,
+        "networkHash": None,
+    }
+
+
 def _read_one_request() -> Any:
     """Read exactly one JSON value from stdin.
 
@@ -112,12 +158,14 @@ def _run_load_flow_command() -> int:
         request = _read_one_request()
     except ValueError as exc:
         # json.JSONDecodeError inherits from ValueError, so this branch
-        # covers both empty-body and malformed-JSON cases.
+        # covers both empty-body and malformed-JSON cases. The metadata
+        # object is populated with the stub values from `_stub_metadata`
+        # so the TypeScript adapter never sees `metadata: null`.
         _emit(
             {
                 "status": "failed_validation",
                 "converged": False,
-                "metadata": None,
+                "metadata": _stub_metadata(),
                 "buses": [],
                 "branches": [],
                 "issues": [

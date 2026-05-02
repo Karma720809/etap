@@ -5,8 +5,8 @@
 // into the app-shaped `LoadFlowResult` consumed by the rest of the
 // application. Spec §9 defines the inner spec types (BusResult,
 // BranchResult, EquipmentLoadingResult); PR #4 wraps those into a
-// runtime-only result that also carries identity, metadata, and an
-// overall status.
+// runtime-only result that also carries identity, metadata, totals,
+// per-row status, and an overall status.
 //
 // Guardrails honored:
 //   - The result is runtime-only. It is never written to the Stage 1
@@ -20,6 +20,14 @@
 //   - Issues are mapped through the spec's code/severity vocabulary
 //     unchanged; the sidecar already emits documented codes
 //     (`E-LF-001` / `E-LF-004` / `E-LF-005` / `W-LF-001..003`).
+//
+// Stage 2 PR #4 review blocker 3: each bus/branch/equipment row carries
+// a row-level status, and the result carries `totalGenerationMw`,
+// `totalLoadMw`, and `totalLossesMw` derived from solver output. The
+// row statuses use the spec's `ok | warning | violation` vocabulary
+// (spec §9.2 / §7.3). The top-level `status` (failed/warning/valid)
+// remains the run-level summary used by callers that just want one
+// signal.
 
 import type { AppNetwork } from "@power-system-study/network-model";
 
@@ -38,6 +46,13 @@ export type LoadFlowStatus = "valid" | "warning" | "failed";
 
 export type LoadFlowBranchKind = "cable" | "transformer";
 
+/**
+ * Row-level result status. Mirrors spec §9.2 `ResultStatus` vocabulary
+ * (`ok | warning | violation`) used by bus voltage-band, branch
+ * loading, and equipment loading classifications.
+ */
+export type LoadFlowResultStatus = "ok" | "warning" | "violation";
+
 /** Per-bus result row. Spec §9 BusResult plus tag projection. */
 export interface LoadFlowBusResult {
   busInternalId: string;
@@ -45,6 +60,11 @@ export interface LoadFlowBusResult {
   voltageKv: number;
   voltagePuPct: number;
   angleDeg: number;
+  /**
+   * Voltage-band status from the bus's `minVoltagePct` / `maxVoltagePct`
+   * (spec §7.3.2). When the bus has no band entered, defaults to "ok".
+   */
+  status: LoadFlowResultStatus;
 }
 
 /** Per-branch result row. Spec §9 BranchResult, app vocabulary. */
@@ -67,6 +87,12 @@ export interface LoadFlowBranchResult {
   /** Branch loading vs rating where available. Null when no rating. */
   loadingPct: number | null;
   lossKw: number;
+  /**
+   * Loading status derived from `loadingPct` (spec §11 W-LF-003 / §9.2
+   * `ResultStatus`). When `loadingPct` is null (no rating wired in
+   * PR #4), defaults to "ok".
+   */
+  status: LoadFlowResultStatus;
 }
 
 /** Loading roll-up for a load or motor connected to a bus. */
@@ -77,6 +103,12 @@ export interface LoadFlowEquipmentLoadingResult {
   origin: "load" | "motor";
   pMw: number;
   qMvar: number;
+  /**
+   * Equipment loading vs rating where available. Null in PR #4 — the
+   * SolverInput contract does not yet carry equipment ratings.
+   */
+  loadingPct: number | null;
+  status: LoadFlowResultStatus;
 }
 
 export type LoadFlowIssueSeverity = SolverIssueSeverity;
@@ -119,6 +151,16 @@ export interface LoadFlowResult {
   branchResults: LoadFlowBranchResult[];
   loadResults: LoadFlowEquipmentLoadingResult[];
   motorResults: LoadFlowEquipmentLoadingResult[];
+  /** Sum of slack-side active power across all branches feeding from sources. */
+  totalGenerationMw: number;
+  /**
+   * Sum of `pMw` across `loadResults` and `motorResults` — the input-side
+   * load total. Per spec §9.2 this is the demand side of the energy
+   * balance equation.
+   */
+  totalLoadMw: number;
+  /** Sum of branch losses (lines + transformers). */
+  totalLossesMw: number;
   issues: LoadFlowIssue[];
   metadata: LoadFlowSolverMetadata;
 }
@@ -143,34 +185,53 @@ export interface NormalizeSolverResultArgs {
  *
  * Mapping rules:
  *   - SolverBusResult.internalId is matched against AppNetwork.buses
- *     to recover `tag` for display.
+ *     to recover `tag` and the voltage band (`minVoltagePct` /
+ *     `maxVoltagePct`) for status classification.
  *   - SolverBranchResult.branchKind="line" maps to
  *     LoadFlowBranchResult.branchKind="cable" — the rest of the app
  *     uses the spec's "cable" vocabulary, never "line".
+ *   - Branch and equipment status use the loading vs 100% threshold
+ *     from spec §11 W-LF-003 (loading > 100% → violation; ≥ 90% →
+ *     warning).
  *   - Loads / motors carry only the input PQ values (pre-solver). The
  *     loading-vs-rating column is null for PR #4; PR #5 will wire
  *     equipment ratings through the contract.
- *   - status: any error issue → "failed"; non-converged → "failed";
- *     warnings (W-LF-*) → "warning"; otherwise "valid".
+ *   - Top-level `status`: any error issue → "failed"; non-converged →
+ *     "failed"; warnings (W-LF-*) OR any non-ok row → "warning";
+ *     otherwise "valid".
+ *   - Totals: `totalLossesMw` sums every branch's `lossKw / 1000`;
+ *     `totalLoadMw` sums load + motor `pMw`; `totalGenerationMw` is
+ *     the slack-side power flowing from each branch whose
+ *     `fromBusInternalId` is attached to a slack source. Failed runs
+ *     return zeros for all totals.
  */
 export function normalizeSolverResult(
   args: NormalizeSolverResultArgs,
 ): LoadFlowResult {
   const { appNetwork, solverInput, solverResult } = args;
 
-  const busTagById = new Map(appNetwork.buses.map((b) => [b.internalId, b.tag] as const));
+  const busById = new Map(appNetwork.buses.map((b) => [b.internalId, b] as const));
   const cableInternalIds = new Set(appNetwork.cables.map((c) => c.internalId));
   const transformerInternalIds = new Set(
     appNetwork.transformers.map((t) => t.internalId),
   );
+  const slackBusIds = new Set(
+    appNetwork.sources
+      .filter((s) => s.role === "slack")
+      .map((s) => s.busInternalId),
+  );
 
-  const busResults: LoadFlowBusResult[] = solverResult.buses.map((b) => ({
-    busInternalId: b.internalId,
-    tag: busTagById.get(b.internalId) ?? b.internalId,
-    voltageKv: b.voltageKv,
-    voltagePuPct: b.voltagePuPct,
-    angleDeg: b.angleDeg,
-  }));
+  const busResults: LoadFlowBusResult[] = solverResult.buses.map((b) => {
+    const bus = busById.get(b.internalId);
+    return {
+      busInternalId: b.internalId,
+      tag: bus?.tag ?? b.internalId,
+      voltageKv: b.voltageKv,
+      voltagePuPct: b.voltagePuPct,
+      angleDeg: b.angleDeg,
+      status: classifyBusVoltage(b.voltagePuPct, bus?.minVoltagePct ?? null, bus?.maxVoltagePct ?? null),
+    };
+  });
 
   const branchResults: LoadFlowBranchResult[] = solverResult.branches.map((br) => {
     const branchKind: LoadFlowBranchKind = mapBranchKind(
@@ -185,8 +246,8 @@ export function normalizeSolverResult(
       sourceEquipmentInternalId: br.internalId,
       fromBusInternalId: br.fromBusInternalId,
       toBusInternalId: br.toBusInternalId,
-      fromBusTag: busTagById.get(br.fromBusInternalId) ?? null,
-      toBusTag: busTagById.get(br.toBusInternalId) ?? null,
+      fromBusTag: busById.get(br.fromBusInternalId)?.tag ?? null,
+      toBusTag: busById.get(br.toBusInternalId)?.tag ?? null,
       pMwFrom: br.pMwFrom,
       qMvarFrom: br.qMvarFrom,
       pMwTo: br.pMwTo,
@@ -194,6 +255,7 @@ export function normalizeSolverResult(
       currentA: br.currentA,
       loadingPct: br.loadingPct,
       lossKw: br.lossKw,
+      status: classifyLoading(br.loadingPct),
     };
   });
 
@@ -204,6 +266,9 @@ export function normalizeSolverResult(
       sl.origin === "load"
         ? appNetwork.loads.find((l) => l.internalId === sl.internalId)?.tag
         : appNetwork.motors.find((m) => m.internalId === sl.internalId)?.tag;
+    // Equipment loading-vs-rating is null in PR #4 — ratings are not
+    // yet part of the SolverInput contract. PR #5 will wire them.
+    const loadingPct: number | null = null;
     const row: LoadFlowEquipmentLoadingResult = {
       equipmentInternalId: sl.internalId,
       tag: tag ?? sl.tag,
@@ -211,6 +276,8 @@ export function normalizeSolverResult(
       origin: sl.origin,
       pMw: sl.pMw,
       qMvar: sl.qMvar,
+      loadingPct,
+      status: classifyLoading(loadingPct),
     };
     if (sl.origin === "load") {
       loadResults.push(row);
@@ -231,7 +298,17 @@ export function normalizeSolverResult(
     networkHash: solverResult.metadata.networkHash,
   };
 
-  const status = deriveStatus(solverResult);
+  const isFailed =
+    solverResult.status === "failed_solver" ||
+    solverResult.status === "failed_validation" ||
+    !solverResult.converged ||
+    issues.some((i) => i.severity === "error");
+
+  const totals = isFailed
+    ? { totalGenerationMw: 0, totalLoadMw: 0, totalLossesMw: 0 }
+    : computeTotals(branchResults, loadResults, motorResults, slackBusIds);
+
+  const status = deriveStatus({ isFailed, busResults, branchResults, issues });
 
   return {
     resultId: args.resultId,
@@ -244,6 +321,9 @@ export function normalizeSolverResult(
     branchResults,
     loadResults,
     motorResults,
+    totalGenerationMw: totals.totalGenerationMw,
+    totalLoadMw: totals.totalLoadMw,
+    totalLossesMw: totals.totalLossesMw,
     issues,
     metadata,
   };
@@ -265,6 +345,50 @@ function mapBranchKind(
   return "cable";
 }
 
+function classifyBusVoltage(
+  voltagePuPct: number,
+  minPct: number | null,
+  maxPct: number | null,
+): LoadFlowResultStatus {
+  // Spec §7.3.2: bus band status compares per-unit voltage % against
+  // the bus's `minVoltagePct` / `maxVoltagePct` band. Without an
+  // entered band the default is "ok" — spec §10.1 keeps these warnings
+  // off by default.
+  if (minPct !== null && voltagePuPct < minPct) return "warning";
+  if (maxPct !== null && voltagePuPct > maxPct) return "warning";
+  return "ok";
+}
+
+function classifyLoading(loadingPct: number | null): LoadFlowResultStatus {
+  // Spec §11 W-LF-003 raises a warning at >100% loading. The 90%
+  // band-near-limit shoulder mirrors the spec §7.3.1 voltage-drop
+  // status so result tables across modules feel consistent.
+  if (loadingPct === null || !Number.isFinite(loadingPct)) return "ok";
+  if (loadingPct > 100) return "violation";
+  if (loadingPct >= 90) return "warning";
+  return "ok";
+}
+
+function computeTotals(
+  branchResults: LoadFlowBranchResult[],
+  loadResults: LoadFlowEquipmentLoadingResult[],
+  motorResults: LoadFlowEquipmentLoadingResult[],
+  slackBusIds: Set<string>,
+): { totalGenerationMw: number; totalLoadMw: number; totalLossesMw: number } {
+  let totalLossesMw = 0;
+  let totalGenerationMw = 0;
+  for (const br of branchResults) {
+    totalLossesMw += br.lossKw / 1000;
+    if (slackBusIds.has(br.fromBusInternalId)) {
+      totalGenerationMw += br.pMwFrom;
+    }
+  }
+  let totalLoadMw = 0;
+  for (const r of loadResults) totalLoadMw += r.pMw;
+  for (const r of motorResults) totalLoadMw += r.pMw;
+  return { totalGenerationMw, totalLoadMw, totalLossesMw };
+}
+
 function toLoadFlowIssue(issue: SolverIssue): LoadFlowIssue {
   const out: LoadFlowIssue = {
     code: issue.code,
@@ -276,18 +400,18 @@ function toLoadFlowIssue(issue: SolverIssue): LoadFlowIssue {
   return out;
 }
 
-function deriveStatus(solverResult: SolverResult): LoadFlowStatus {
-  if (
-    solverResult.status === "failed_solver" ||
-    solverResult.status === "failed_validation"
-  ) {
-    return "failed";
-  }
-  if (!solverResult.converged) {
-    return "failed";
-  }
-  const hasError = solverResult.issues.some((i) => i.severity === "error");
-  if (hasError) return "failed";
-  const hasWarning = solverResult.issues.some((i) => i.severity === "warning");
-  return hasWarning ? "warning" : "valid";
+interface DeriveStatusArgs {
+  isFailed: boolean;
+  busResults: LoadFlowBusResult[];
+  branchResults: LoadFlowBranchResult[];
+  issues: LoadFlowIssue[];
+}
+
+function deriveStatus(args: DeriveStatusArgs): LoadFlowStatus {
+  if (args.isFailed) return "failed";
+  const hasWarningIssue = args.issues.some((i) => i.severity === "warning");
+  const hasNonOkBus = args.busResults.some((b) => b.status !== "ok");
+  const hasNonOkBranch = args.branchResults.some((b) => b.status !== "ok");
+  if (hasWarningIssue || hasNonOkBus || hasNonOkBranch) return "warning";
+  return "valid";
 }

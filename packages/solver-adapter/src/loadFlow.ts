@@ -10,16 +10,23 @@
 // Guardrails enforced here:
 //   - The orchestrator does NOT mutate the input AppNetwork.
 //   - The runtime snapshot is in-memory only — never written to a
-//     project file.
-//   - When the AppNetwork has zero buses or zero in-service slack
-//     sources, the orchestrator returns a `failed` LoadFlowResult with
-//     a structured issue WITHOUT spawning the Python sidecar. This
-//     avoids paying the sidecar cold-start cost for an obviously
-//     unsolvable network and keeps the test surface trivially
-//     mockable.
+//     project file. The snapshot is a deep clone (per Stage 2 PR #4
+//     review blocker 2) so later mutation of the caller's AppNetwork
+//     cannot change the snapshot's contents.
+//   - Pre-flight short-circuits (no buses, no slack, multiple slack)
+//     return a `failed` LoadFlowResult with a structured issue
+//     WITHOUT spawning the Python sidecar.
 //   - Transport-level failures (non-zero exit, malformed JSON, IPC
-//     timeout) are mapped to `E-LF-004 solver adapter failure` —
-//     never to fabricated voltages or currents.
+//     timeout, missing metadata in the response) are mapped to
+//     `E-LF-004 solver adapter failure` — never to fabricated voltages
+//     or currents.
+//
+// Bundle shape: `LoadFlowRunBundle` exposes the runtime
+// `LoadFlowResult` plus a `voltageDrop` field hard-coded to `null` for
+// PR #4. Stage 2 spec §S2-OQ-05 requires the result bundle to expose
+// both modules; PR #5 will populate `voltageDrop`. The field is
+// included now (rather than added later) so downstream consumers do
+// not need to widen their type when PR #5 lands.
 
 import {
   type AppNetwork,
@@ -34,6 +41,7 @@ import {
 import {
   createRuntimeSnapshot,
   type RuntimeCalculationSnapshot,
+  type RuntimeValidationSummary,
 } from "./runtimeSnapshot.js";
 import {
   SidecarTransportError,
@@ -55,6 +63,14 @@ export interface RunLoadFlowOptions {
   transport?: SidecarTransport;
   /** Project id stamped on the runtime snapshot for traceability. */
   projectId?: string | null;
+  /**
+   * Validation/readiness summary captured by the caller BEFORE the
+   * run was issued. The orchestrator stamps this on the runtime
+   * snapshot so PR #6 retention can audit it. Defaults to a minimal
+   * "not_evaluated" summary when the caller has no readiness signal
+   * to share (e.g., direct adapter tests).
+   */
+  validation?: RuntimeValidationSummary;
   /** Override `Date.now()` for deterministic test ids. */
   now?: () => Date;
   /** Override the result id generator for deterministic tests. */
@@ -65,7 +81,8 @@ export interface RunLoadFlowOptions {
 
 /**
  * Outcome of a Load Flow run: the runtime LoadFlowResult, the runtime
- * snapshot it references, and the SolverInput sent to the sidecar.
+ * snapshot it references, the SolverInput sent to the sidecar, and a
+ * placeholder for the Voltage Drop module landing in PR #5.
  *
  * This bundle is returned by-value and held by callers in memory.
  * Stage 2 does not persist any of these to disk.
@@ -74,6 +91,11 @@ export interface LoadFlowRunBundle {
   result: LoadFlowResult;
   snapshot: RuntimeCalculationSnapshot;
   solverInput: SolverInput;
+  /**
+   * Voltage Drop result. Always `null` in PR #4. Populated by Stage 2
+   * PR #5 from the same Load Flow run (spec §S2-OQ-05).
+   */
+  voltageDrop: null;
 }
 
 let __resultCounter = 0;
@@ -98,22 +120,27 @@ export async function runLoadFlowForAppNetwork(
   const createdAtDate = now();
   const createdAt = createdAtDate.toISOString();
 
+  const solverInput = buildSolverInputFromAppNetwork(appNetwork, {
+    options: solverOptions,
+  });
+
+  const preflightIssue = preflightAppNetwork(appNetwork);
+  const validation: RuntimeValidationSummary =
+    options.validation ?? makeDefaultValidationSummary(preflightIssue);
+
   const snapshot = createRuntimeSnapshot({
     appNetwork,
+    solverInput,
     projectId: options.projectId ?? null,
     options: solverOptions,
     adapterVersion: SOLVER_ADAPTER_VERSION,
+    validation,
     now: () => createdAtDate,
     generateId: options.generateSnapshotId,
   });
 
   const resultId = (options.generateResultId ?? (() => defaultGenerateResultId(createdAtDate)))();
 
-  const solverInput = buildSolverInputFromAppNetwork(appNetwork, {
-    options: solverOptions,
-  });
-
-  const preflightIssue = preflightAppNetwork(appNetwork);
   if (preflightIssue !== null) {
     return makeFailureBundle({
       appNetwork,
@@ -168,7 +195,7 @@ export async function runLoadFlowForAppNetwork(
     createdAt,
   });
 
-  return { result, snapshot, solverInput };
+  return { result, snapshot, solverInput, voltageDrop: null };
 }
 
 interface FailureBundleArgs {
@@ -217,7 +244,12 @@ function makeFailureBundle(args: FailureBundleArgs): LoadFlowRunBundle {
     createdAt: args.createdAt,
   });
 
-  return { result, snapshot: args.snapshot, solverInput: args.solverInput };
+  return {
+    result,
+    snapshot: args.snapshot,
+    solverInput: args.solverInput,
+    voltageDrop: null,
+  };
 }
 
 /**
@@ -228,10 +260,10 @@ function makeFailureBundle(args: FailureBundleArgs): LoadFlowRunBundle {
  * The intent is not to duplicate `validateForCalculation()` (Stage 1)
  * or topology extraction (`packages/network-model`); both have already
  * run by the time an AppNetwork reaches this orchestrator. This is a
- * defense-in-depth pre-flight: empty bus list / no slack are
- * conditions where pandapower would either crash or produce a
- * meaningless result, so we short-circuit to an `E-LF-003` /
- * `E-LF-005` issue without paying the spawn cost.
+ * defense-in-depth pre-flight: empty bus list / no-slack / multi-slack
+ * are conditions where pandapower would either crash or produce a
+ * meaningless result, so we short-circuit to a structured issue
+ * without paying the spawn cost.
  */
 function preflightAppNetwork(appNetwork: AppNetwork): LoadFlowIssue | null {
   if (appNetwork.buses.length === 0) {
@@ -250,5 +282,39 @@ function preflightAppNetwork(appNetwork: AppNetwork): LoadFlowIssue | null {
         "AppNetwork has no slack source. Stage 2 MVP requires exactly one in-service utility (spec §6.2).",
     };
   }
+  if (slackCount > 1) {
+    return {
+      code: "E-LF-005",
+      severity: "error",
+      message: `AppNetwork has ${slackCount} slack sources. Stage 2 MVP supports exactly one (spec §6.2; multi-utility deferred to S2-FU-03).`,
+    };
+  }
   return null;
+}
+
+function makeDefaultValidationSummary(
+  preflightIssue: LoadFlowIssue | null,
+): RuntimeValidationSummary {
+  if (preflightIssue === null) {
+    return {
+      status: "ready_to_run",
+      networkBuildStatus: "valid",
+      issues: [],
+    };
+  }
+  return {
+    status: "blocked_by_validation",
+    networkBuildStatus: "valid",
+    issues: [
+      {
+        code: preflightIssue.code,
+        severity: preflightIssue.severity,
+        message: preflightIssue.message,
+        ...(preflightIssue.internalId !== undefined
+          ? { equipmentInternalId: preflightIssue.internalId }
+          : {}),
+        ...(preflightIssue.field !== undefined ? { field: preflightIssue.field } : {}),
+      },
+    ],
+  };
 }

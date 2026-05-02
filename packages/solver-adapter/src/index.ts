@@ -38,6 +38,7 @@ export {
   type LoadFlowIssueCode,
   type LoadFlowIssueSeverity,
   type LoadFlowResult,
+  type LoadFlowResultStatus,
   type LoadFlowSolverMetadata,
   type LoadFlowStatus,
   type NormalizeSolverResultArgs,
@@ -46,6 +47,9 @@ export {
   createRuntimeSnapshot,
   type CreateRuntimeSnapshotInput,
   type RuntimeCalculationSnapshot,
+  type RuntimeValidationIssue,
+  type RuntimeValidationStatus,
+  type RuntimeValidationSummary,
 } from "./runtimeSnapshot.js";
 export {
   runLoadFlowForAppNetwork,
