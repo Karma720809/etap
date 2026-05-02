@@ -4,6 +4,7 @@
 **Stage:** Stage 2 — Load Flow / Voltage Drop MVP
 **Implements:** `stage_2_load_flow_voltage_drop_spec.md` §8 (A2 / A3)
 **Authoring PR:** Stage 2 PR #3 — Solver Adapter Contract + Python Sidecar
+**Activated by:** Stage 2 PR #4 — Real Load Flow execution + result normalization
 **Companion decision:** `solver_adapter_hosting_decision.md` (S2-FU-01)
 **Date:** 2026-05-02
 
@@ -285,7 +286,7 @@ the sidecar; the wire format always uses `internalId`.
 
 ## 5. What this PR ships and what it does not
 
-### 5.1 Ships
+### 5.1 Ships in PR #3
 
 - TypeScript adapter contract types (§2).
 - `buildSolverInputFromAppNetwork()` mapper (§3) — pure, tested.
@@ -293,16 +294,55 @@ the sidecar; the wire format always uses `internalId`.
   smoke command. No pandapower call.
 - Contract tests (see §6).
 
-### 5.2 Does not ship (deferred)
+### 5.2 Ships in PR #4 (this commit)
 
-- Any pandapower call.
-- Any `BusResult` / `BranchResult` per spec §9.
-- Any `LoadFlowResult` / `VoltageDropResult`.
-- Any runtime `CalculationSnapshot`.
-- Any disk persistence.
-- Any UI overlay or table.
+- Exact `pandapower==2.14.10` pin in
+  `services/solver-sidecar/requirements.txt` (2.14.11's wheel ships an
+  unbumped `__version__` upstream, so 2.14.10 keeps the pin and the
+  runtime-reported `SolverMetadata.solverVersion` aligned).
+- `run_load_flow` command on the Python sidecar (stdio JSON-Lines
+  transport): converts a `SolverInput` JSON request into a pandapower
+  network, runs balanced 3-phase Newton-Raphson load flow, and
+  returns a `SolverResult` JSON response with `internalId`-keyed
+  bus and branch rows. Failure modes (pandapower missing, malformed
+  input, non-convergence, runpp exception) map to structured
+  `E-LF-001` / `E-LF-004` / `E-LF-005` issues — never to fabricated
+  numerical values.
+- TypeScript `SidecarTransport` interface and `StdioSidecarTransport`
+  implementation (`packages/solver-adapter/src/sidecarClient.ts`).
+- Runtime `LoadFlowResult` / `LoadFlowBusResult` /
+  `LoadFlowBranchResult` / `LoadFlowEquipmentLoadingResult` /
+  `LoadFlowIssue` types and a pure
+  `normalizeSolverResult(...)` projection from the solver-shaped
+  result into the app-shaped result
+  (`packages/solver-adapter/src/results.ts`).
+- Runtime-only `RuntimeCalculationSnapshot` type and factory
+  (`packages/solver-adapter/src/runtimeSnapshot.ts`). Per spec §10 /
+  S2-OQ-06 these are NEVER serialized into the Stage 1 canonical
+  project file; the project file's `calculationSnapshots` array
+  remains empty in every Stage 2 PR.
+- Orchestrator `runLoadFlowForAppNetwork(...)`
+  (`packages/solver-adapter/src/loadFlow.ts`) tying the steps
+  together. Pre-flight short-circuits (no buses, no slack) avoid
+  spawning the sidecar for unsolvable inputs.
+- Unit tests for transport, normalization, and orchestrator.
+- Opt-in integration test (`tests/loadFlow.integration.test.ts`)
+  gated behind `RUN_SIDECAR_INTEGRATION=1` that exercises the full
+  TS↔Python boundary.
 
-These are all explicitly in scope for Stage 2 PR #4 / PR #5 / PR #6.
+### 5.3 Does not ship (still deferred)
+
+- Voltage Drop derivation — Stage 2 PR #5.
+- UI result tables / diagram overlay — Stage 2 PR #5.
+- Daemon / long-running sidecar / FastAPI transport — deferred.
+- Disk persistence of runtime snapshots / results — deferred
+  (S2-FU-07).
+- Multi-utility / multi-slack support — deferred (S2-FU-03).
+- Cable loading-vs-rating — the `SolverLine` contract does not yet
+  carry cable ampacity; cable `loadingPct` is reported as `null`
+  until that field is wired through.
+- `inputHash` / `networkHash` byte-stable serializer — reserved
+  (S2-FU-04).
 
 ---
 

@@ -12,3 +12,8 @@ coverage/
 .env.local
 
 Temp/
+
+# Python sidecar local virtual envs and bytecode
+.venv/
+__pycache__/
+*.pyc
