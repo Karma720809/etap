@@ -1032,7 +1032,7 @@ convention.
 | `E-LF-003` | error | Source / slack invalid: no in-service slack-eligible source, **or** two or more in-service utilities (multi-utility is deferred per S2-FU-03), **or** the only in-service generator is in an unsupported mode (`pv_voltage_control` / `island_isochronous`). | Run blocked. |
 | `E-LF-004` | error | Solver adapter failure (pandapower exception, version mismatch, IPC failure). | Run failed. |
 | `E-LF-005` | error | Load Flow result unavailable (pre-run state when bundle is requested before a successful run). | Diagnostic. |
-| `E-VD-001` | error | Voltage Drop unavailable because Load Flow is invalid. | Voltage Drop is `null`. |
+| `E-VD-001` | error | Voltage Drop unavailable because Load Flow is invalid. | When Voltage Drop derivation is requested (the default), the bundle's `voltageDrop` carries a failed `VoltageDropResult` whose `issues` includes `E-VD-001` and whose `branchResults` is empty (spec §7.4 PR #5 clarification). `voltageDrop` is `null` only when derivation is opted out via `RunLoadFlowOptions.includeVoltageDrop = false`. |
 | `E-VD-002` | error | Voltage Drop input missing (load `kW`+`pf`/`kvar` not derivable, cable R/X missing on a feeder). | Run blocked. |
 
 ### 11.2 Warnings
@@ -1058,9 +1058,27 @@ convention.
 
 ## 12. Golden Case Candidates
 
+> **Stage 2 closeout status (Rev A.3).** No Golden Case ships in Stage 2.
+> The case definitions below remain the **post-MVP design intent** but
+> their fixtures, schema extension (§12.7), and verified-reference work
+> are deferred. AC-S2-11 is mapped as `deferred-post-stage-2` in
+> `scripts/acceptance-coverage.json`. The repository contains no
+> `GC-LF-*`, `GC-VD-*`, or `GC-INVALID-LF-*` fixture file. Stage 2
+> coverage today is the unit-test suite (network-model, solver-adapter,
+> calculation-store), the apps/web run-path test
+> (`apps/web/tests/CalculationStatusPanel.test.tsx`), and the opt-in
+> pandapower integration smoke
+> (`packages/solver-adapter/tests/loadFlow.integration.test.ts`,
+> gated by `RUN_SIDECAR_INTEGRATION=1`). The integration smoke does
+> **not** satisfy the S2-OQ-07 verified-reference requirement; it is a
+> regression smoke at best.
+
 Per S2-OQ-07, pandapower may serve as `provisional` or
 `regression_only` reference but never as the sole verified reference.
-Each Golden Case lists `referenceType` and `referenceStatus`.
+Each Golden Case lists `referenceType` and `referenceStatus`. None of
+the entries below were promoted in Stage 2; all `referenceStatus`
+values quoted in §12.1–12.6 describe the **target state** for the
+post-MVP Golden Case PR, not a status reached in Stage 2.
 
 | `referenceStatus` | Meaning |
 |---|---|
@@ -1075,12 +1093,14 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
   extraction, branch_chain conversion, and basic Load Flow.
 - **Topology.** UTL-001 → BUS-MV → TR-001 → BUS-LV → [BRK-001, CBL-001] →
   BUS-LD → LD-001.
-- **Reference type.** Hand calculation + IEC textbook example.
-- **Reference status.** `provisional` until reference is added; promoted
-  to `verified` in Stage 2 PR #4.
-- **Expected values.** Bus voltage % (LV bus near 100% with light load),
-  branch loading % on cable consistent with hand calculation, total
-  losses match within 1%.
+- **Reference type.** Hand calculation + IEC textbook example (target).
+- **Reference status.** Not shipped in Stage 2. Target `verified` status
+  (per S2-OQ-07) is deferred to the post-MVP Golden Case PR; the spec's
+  earlier "promoted to `verified` in Stage 2 PR #4" plan did not land
+  and is superseded by §19 Rev A.3.
+- **Expected values (target).** Bus voltage % (LV bus near 100% with
+  light load), branch loading % on cable consistent with hand
+  calculation, total losses match within 1%.
 - **Tolerance.** Voltage 0.1%; current 0.5%; loading 0.5%; losses 1.0%.
 - **Code expectations.** No errors; possibly `W-LF-003` if loading is
   intentionally tight in the case definition.
@@ -1091,10 +1111,13 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
   generation = total load + losses convergence and per-load attribution.
 - **Topology.** UTL → MV bus → TR → LV bus inside MCC (placeholder) →
   LD-001, LD-002, M-001, M-002.
-- **Reference type.** Verified spreadsheet reference + textbook crosscheck.
-- **Reference status.** `provisional` initially; `verified` by Stage 2 PR #5.
-- **Expected values.** Per-load `pMw` matches input; per-load loading
-  computed; bus voltage within band.
+- **Reference type.** Verified spreadsheet reference + textbook
+  crosscheck (target).
+- **Reference status.** Not shipped in Stage 2. The earlier "verified
+  by Stage 2 PR #5" plan did not land; promotion to `verified` is
+  deferred to the post-MVP Golden Case PR (§19 Rev A.3).
+- **Expected values (target).** Per-load `pMw` matches input; per-load
+  loading computed; bus voltage within band.
 - **Tolerance.** Voltage 0.1%; loading 0.5%.
 - **Code expectations.** May produce `W-LF-001` if the bus drops below
   `minVoltagePct` — that should be encoded into the case so the test is
@@ -1108,10 +1131,15 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
 - **Topology.** UTL → MV → TR → LV bus → [BRK, long CBL] → motor terminal
   bus → M-001.
 - **Reference type.** Hand calculation (closed-form per
-  `V = I × R + j I × X`).
-- **Reference status.** `verified` (closed-form reference is trivial).
-- **Expected values.** `voltageDropPct` matches hand calc within 0.1%;
-  `status = "violation"` with `W-VD-001`.
+  `V = I × R + j I × X`) (target).
+- **Reference status.** Not shipped in Stage 2. The closed-form
+  reference is straightforward to author, but the fixture and the
+  Golden Case schema extension (§12.7) did not land; deferred to the
+  post-MVP Golden Case PR (§19 Rev A.3). Coverage of the underlying
+  derivation logic today comes from
+  `packages/solver-adapter/tests/voltageDrop.test.ts`.
+- **Expected values (target).** `voltageDropPct` matches hand calc
+  within 0.1%; `status = "violation"` with `W-VD-001`.
 - **Tolerance.** 0.1%.
 
 ### 12.4 GC-INVALID-LF-01 — Islanded Bus
@@ -1119,8 +1147,13 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
 - **Purpose.** A bus with equipment but no path to any source.
 - **Topology.** UTL → MV → TR → LV; separately, an isolated LD on a bus
   with no transformer feeding it.
-- **Reference type.** Validation fixture (no numeric reference needed).
-- **Reference status.** `verified`.
+- **Reference type.** Validation fixture (no numeric reference needed)
+  (target).
+- **Reference status.** Not shipped in Stage 2. The dedicated Golden
+  Case fixture was not authored; deferred to the post-MVP Golden Case
+  PR (§19 Rev A.3). Today the equivalent islanded-bus assertion lives
+  in `packages/validation/tests/floating-bus.test.ts` (E-NET-002) and
+  the network-model build path.
 - **Expected behavior.** `extractAppNetwork()` returns `appNetwork = null`
   with `E-NET-002` for the islanded bus. Run is blocked.
 
@@ -1129,8 +1162,14 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
 - **Purpose.** Project with buses/loads but no in-service utility or
   generator.
 - **Reference type.** `validation_fixture` (no numeric reference
-  needed; assertion is on emitted codes and `appNetwork = null`).
-- **Reference status.** `verified`.
+  needed; assertion is on emitted codes and `appNetwork = null`)
+  (target).
+- **Reference status.** Not shipped in Stage 2. The dedicated Golden
+  Case fixture was not authored; deferred to the post-MVP Golden Case
+  PR (§19 Rev A.3). Today the equivalent source-missing assertions
+  live in `packages/network-model/tests/source-policy.test.ts`
+  (E-LF-003) and `packages/validation/tests/connectivity.test.ts`
+  (E-NET-001).
 - **Expected behavior.** `validateProject()` returns `E-NET-001`;
   `validateForCalculation()` keeps it as error; readiness wrapper sets
   `status = "blocked_by_validation"` and reports `E-LF-003`.
@@ -1140,18 +1179,27 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
 - **Purpose.** A `1P2W` bus with an attached load, otherwise
   source-fed.
 - **Reference type.** `validation_fixture` (no numeric reference
-  needed; assertion is on emitted codes and `appNetwork = null`).
-- **Reference status.** `verified`.
+  needed; assertion is on emitted codes and `appNetwork = null`)
+  (target).
+- **Reference status.** Not shipped in Stage 2. The dedicated Golden
+  Case fixture was not authored; deferred to the post-MVP Golden Case
+  PR (§19 Rev A.3). Today the equivalent unsupported-topology
+  assertion lives in `packages/validation/tests/non-3p-topology.test.ts`
+  (E-LF-002).
 - **Expected behavior.** Editor warns `W-EQ-002`. Calculation readiness
   raises `E-LF-002`. Run blocked.
 
 ### 12.7 Golden Case metadata
 
-Each Golden Case is stored with the schema sketched in
-`docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/golden_case_metadata.schema.json`,
-extended for Stage 2 to include `referenceStatus`, `module`, expected
-codes, and tolerance tables. The schema extension is authored in
-Stage 2 PR #4.
+The Golden Case schema extension (Stage 2-specific `referenceStatus`,
+`module`, expected codes, and tolerance tables) was originally planned
+to be authored in Stage 2 PR #4, layered on top of
+`docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/golden_case_metadata.schema.json`.
+**It did not ship in Stage 2.** No Stage-2-flavored Golden Case
+metadata file exists in this repository; the schema extension and the
+per-case fixture work are both deferred to the post-MVP Golden Case PR
+(§19 Rev A.3). Spec §12.1–12.6 records the target case definitions,
+not delivered artifacts.
 
 ---
 
@@ -1167,7 +1215,7 @@ a test file pinned to specific layer boundaries.
 | `S2-ADP-03` | A1 | `packages/network-model` | Transformer node → `NetworkTransformerBranch`: HV/LV mapping correct; tap position carried through; vector group preserved. |
 | `S2-ADP-04` | A2 | `packages/solver-adapter-pandapower` | `AppNetwork → SolverInput`: every `NetworkBus`/`NetworkCableBranch`/`NetworkTransformerBranch` maps to a pandapower element; bidirectional `internalId ↔ pandapowerIndex` map intact. |
 | `S2-ADP-05` | A3 | `packages/solver-adapter-pandapower` | `SolverOutput → NormalizedResult`: every `BusResult.busInternalId` resolves; per-branch `currentA` / `loadingPct` computed; `converged` flag honest. |
-| `S2-ADP-06` | derive | `packages/calculation` | `LoadFlowResult → VoltageDropResult`: per-branch sending/receiving voltages; `status` mapping per §7.3; `voltageDrop = null` when Load Flow is invalid (`E-VD-001`). |
+| `S2-ADP-06` | derive | `packages/solver-adapter` | `LoadFlowResult → VoltageDropResult`: per-branch sending/receiving voltages; `status` mapping per §7.3; when Load Flow is invalid and derivation is requested, the bundle's `voltageDrop` is a failed `VoltageDropResult` whose `issues` carries `E-VD-001` (spec §7.4 PR #5 clarification). `voltageDrop` is `null` only when derivation is opted out (`RunLoadFlowOptions.includeVoltageDrop = false`). |
 | `S2-ADP-07` | A4 | `apps/web` | `ResultBundle → UI table / overlay`: result tables render correct rows; diagram overlay shows bus % and branch %. |
 | `S2-ADP-08` | A5 | `packages/calculation-store` | `ResultBundle → CalculationSnapshot reference`: bundle's `snapshotId` points at a real snapshot; retention rule (§9.5) respected. |
 
@@ -1297,17 +1345,30 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
   decision (S2-FU-01) is closed in writing. If the decision is still
   open, PR #3 stays in draft.
 
-### Stage 2 PR #4 — Load Flow result normalization + first Golden Case
+### Stage 2 PR #4 — Load Flow result normalization (Golden Case wiring deferred)
 
-- New package `packages/calculation` providing the result model in §9
-  and `runLoadFlow(scenarioId): CalculationResultBundle`.
+- Result types and the orchestrator (`runLoadFlowForAppNetwork`) live
+  in `packages/solver-adapter` (the standalone `packages/calculation`
+  package was not extracted; the spec's earlier naming is superseded
+  by §19 Rev A.3 closeout notes).
 - **No change to the Stage 1 canonical project-file schema.** No new
   variant is admitted into `CalculationSnapshotPlaceholder`; the
   project file's `calculationSnapshots` array continues to be empty.
-- First real **runtime** `CalculationSnapshot` permitted in
-  `packages/calculation-store` (S2-OQ-06). Runtime snapshots are
-  in-memory only and are not written to disk.
-- GC-LF-01 promoted to `verified`.
+- First real **runtime** `CalculationSnapshot` permitted (S2-OQ-06).
+  The type lives in `packages/solver-adapter/src/runtimeSnapshot.ts`;
+  retention lives in `packages/calculation-store` after the PR #6
+  split. Runtime snapshots are in-memory only and are not written to
+  disk.
+- **GC-LF-01 was not promoted to `verified` in PR #4.** The spec's
+  earlier "GC-LF-01 promoted to `verified`" plan did not land. No
+  Golden Case fixture exists in the repository; AC-S2-11 is
+  `deferred-post-stage-2` (§12, §19 Rev A.3,
+  `scripts/acceptance-coverage.json`). The opt-in pandapower
+  integration test
+  (`packages/solver-adapter/tests/loadFlow.integration.test.ts`,
+  gated by `RUN_SIDECAR_INTEGRATION=1`) is the current end-to-end
+  smoke; it does **not** satisfy the S2-OQ-07 verified-reference
+  requirement.
 - New `validateForCalculation` integration with topology issues.
 
 ### Stage 2 PR #5 — Voltage Drop result + UI tables / overlay
@@ -1468,4 +1529,4 @@ the corresponding implementation PR — they do not block Stage 2 PR #1.
 | Rev A | 2026-05-02 | Initial Stage 2 spec. Closes S2-OQ-01 through S2-OQ-07; defines AppNetwork, topology extraction, branch_chain conversion policy, Load Flow / Voltage Drop assumptions, solver adapter contracts, result model, snapshot policy, Stage 2 codes, Golden Case candidates, adapter contract tests, UI impact, AC-S2-01..17, and the six-PR breakdown. Spec-only PR. |
 | Rev A.1 | 2026-05-02 | Spec-review patch. Blocker 1: tightened S2-OQ-06 / §9.4 / §10 / §16 / §17 / AC-S2-10 / AC-S2-12 / AC-S2-14 to state that the Stage 1 canonical project-file schema is unchanged for the entirety of Stage 2 — `calculationSnapshots` stays empty in every PR; runtime `CalculationSnapshot` / `CalculationResultBundle` live only in `packages/calculation-store`; disk persistence is deferred (S2-FU-07). Blocker 2: added `Reference type: validation_fixture` to GC-INVALID-LF-02 and GC-INVALID-LF-03. Non-blocking patches: tightened §5 branch-chain wording (no open gate **and** no out-of-service member); split §7.3 into branch voltage-drop status (§7.3.1) and bus voltage-band status (§7.3.2); split §10 warnings text into readiness vs result phases; deferred multi-utility / SC-equivalent PQ conversion (§4.3 / §6.2 / §11 `E-LF-003` / S2-FU-03) — Stage 2 MVP requires exactly one in-service utility; added Stage 2 PR #3 merge gate on S2-FU-01 hosting decision. Spec-only; no code/schema/fixture changes. |
 | Rev A.2 | 2026-05-02 | S2-FU-01 closed in writing as part of Stage 2 PR #3 (Solver Adapter Contract + Python Sidecar). §18 entry updated to point at `docs/stage-2/solver_adapter_hosting_decision.md` and `docs/stage-2/solver_adapter_contract.md`. Decision: Python sidecar service hosts pandapower; the TypeScript adapter contract is solver-agnostic and lives in `packages/solver-adapter`. No other spec sections changed; remaining follow-ups (S2-FU-02..08) unchanged. |
-| Rev A.3 | 2026-05-02 | Stage 2 closeout / acceptance closure (Stage 2 PR #1–#6 all merged). Spec-text fixes for documented mismatches: AC-S2-08 wording updated to match the PR #5 §7.4 clarification (failed `VoltageDropResult` with `E-VD-001`, not `null`); §16 PR #5 amended to record that Golden Case wiring (GC-LF-02 / GC-VD-01 / GC-INVALID-LF-01..03) did not actually ship in PR #5 and is deferred post-Stage-2 alongside the Golden Case schema extension (§12.7). New tooling closeout: `scripts/acceptance-coverage.json` extended with a `stage2` block mapping AC-S2-01..17 to verifying tests / files; `scripts/check-acceptance.ts` enforces both Stage 1 (AC01..AC23) and Stage 2 (AC-S2-01..17) coverage. AC-S2-11 (Golden Cases) is marked `deferred-post-stage-2`; AC-S2-13 maps to the Stage 1 manifest itself. No code, schema, fixture, or solver-sidecar behavior changes in this revision; the Stage 1 canonical project-file schema remains untouched and `calculationSnapshots` remains empty per spec §10 / §17. |
+| Rev A.3 | 2026-05-02 | Stage 2 closeout / acceptance closure (Stage 2 PR #1–#6 all merged). Spec-text fixes for documented mismatches: AC-S2-08 wording updated to match the PR #5 §7.4 clarification (failed `VoltageDropResult` with `E-VD-001`, not `null`); §16 PR #5 amended to record that Golden Case wiring (GC-LF-02 / GC-VD-01 / GC-INVALID-LF-01..03) did not actually ship in PR #5 and is deferred post-Stage-2 alongside the Golden Case schema extension (§12.7). New tooling closeout: `scripts/acceptance-coverage.json` extended with a `stage2` block mapping AC-S2-01..17 to verifying tests / files; `scripts/check-acceptance.ts` enforces both Stage 1 (AC01..AC23) and Stage 2 (AC-S2-01..17) coverage. AC-S2-11 (Golden Cases) is marked `deferred-post-stage-2`; AC-S2-13 maps to the Stage 1 manifest itself. No code, schema, fixture, or solver-sidecar behavior changes in this revision; the Stage 1 canonical project-file schema remains untouched and `calculationSnapshots` remains empty per spec §10 / §17. — **Rev A.3 follow-up patch (Codex review):** two normative contradictions corrected so the spec reads consistently end-to-end. Blocker 1 (Golden Cases): §12 prefaces the case list with a "no Golden Case ships in Stage 2" banner; §12.1–12.6 per-case `Reference status` lines no longer claim `verified`/`provisional` was reached and instead point at the post-MVP Golden Case PR; §12.7 notes the schema extension did not land; §16 PR #4 retitled to "Golden Case wiring deferred" and the "GC-LF-01 promoted to `verified`" line removed. Blocker 2 (Voltage Drop failure): §11.1 `E-VD-001` row and §13 `S2-ADP-06` row rewritten to match `packages/solver-adapter/src/voltageDrop.ts` — invalid Load Flow with derivation requested produces a failed `VoltageDropResult` carrying `E-VD-001`; `voltageDrop` is `null` only when `RunLoadFlowOptions.includeVoltageDrop = false`. No code, schema, fixture, or solver-sidecar changes in this follow-up patch. |
