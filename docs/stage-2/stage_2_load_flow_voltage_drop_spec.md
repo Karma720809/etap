@@ -1246,7 +1246,7 @@ status placeholder.
 | AC-S2-05 | Bus voltages are displayed in the Load Flow result table with band-status classification (`ok` / `warning` / `violation`). |
 | AC-S2-06 | Branch current and loading % are displayed for cables and transformers in the Load Flow result table. |
 | AC-S2-07 | Voltage Drop result is derived from Load Flow and displayed in the Voltage Drop result table with sending / receiving voltage, drop %, limit %, status. |
-| AC-S2-08 | When Load Flow is invalid, Voltage Drop is `null` and `E-VD-001` is reported; the bundle's `voltageDrop` field is null and the table shows the empty state. |
+| AC-S2-08 | When Load Flow is invalid and Voltage Drop derivation is requested (the default), the bundle's `voltageDrop` carries a failed `VoltageDropResult` whose `issues` includes `E-VD-001`; `voltageDrop` is `null` only when derivation is opted out via `RunLoadFlowOptions.includeVoltageDrop = false`. The Voltage Drop table renders an explanatory empty state from the failed result. (Reflects the PR #5 §7.4 clarification — earlier drafts said `voltageDrop` is `null`, but the implementation populates a failed result so the UI surfaces the cause without a re-run.) |
 | AC-S2-09 | An input edit that affects the AppNetwork marks the latest bundle as `stale`, status `"stale"`, and the diagram overlay is dimmed. |
 | AC-S2-10 | After Stage 2 PR #4 ships, a successful run produces a runtime `CalculationSnapshot` (in `packages/calculation-store`) and a `CalculationResultBundle` whose `snapshotId` references that runtime snapshot. The project file's `calculationSnapshots` array remains empty. |
 | AC-S2-11 | Each Stage 2 Golden Case (`GC-LF-01`, `GC-LF-02`, `GC-VD-01`, `GC-INVALID-LF-01`, `GC-INVALID-LF-02`, `GC-INVALID-LF-03`) passes within tolerance (§12). |
@@ -1355,8 +1355,16 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
   transport is injected, so browser bundles import the orchestrator
   cleanly.
 - Adapter contract tests `S2-ADP-06..07`.
-- GC-LF-02, GC-VD-01 added; GC-INVALID-LF-01..03 wired into the
-  validation suite.
+- Golden Case wiring (GC-LF-02 / GC-VD-01 / GC-INVALID-LF-01..03)
+  did **not** ship in PR #5. Stage 2 closeout (§19 Rev A.3) records
+  the deferral: AC-S2-11 is mapped as `deferred-post-stage-2` in
+  `scripts/acceptance-coverage.json`. The Golden Case schema
+  extension (§12.7) and per-case fixture work move to a post-MVP
+  follow-up. The opt-in pandapower integration test
+  (`packages/solver-adapter/tests/loadFlow.integration.test.ts`,
+  gated by `RUN_SIDECAR_INTEGRATION=1`) currently serves as the
+  end-to-end smoke; it does **not** satisfy the verified-reference
+  requirement of S2-OQ-07.
 
 ### Stage 2 PR #6 — Stale result + snapshot retention
 
@@ -1460,3 +1468,4 @@ the corresponding implementation PR — they do not block Stage 2 PR #1.
 | Rev A | 2026-05-02 | Initial Stage 2 spec. Closes S2-OQ-01 through S2-OQ-07; defines AppNetwork, topology extraction, branch_chain conversion policy, Load Flow / Voltage Drop assumptions, solver adapter contracts, result model, snapshot policy, Stage 2 codes, Golden Case candidates, adapter contract tests, UI impact, AC-S2-01..17, and the six-PR breakdown. Spec-only PR. |
 | Rev A.1 | 2026-05-02 | Spec-review patch. Blocker 1: tightened S2-OQ-06 / §9.4 / §10 / §16 / §17 / AC-S2-10 / AC-S2-12 / AC-S2-14 to state that the Stage 1 canonical project-file schema is unchanged for the entirety of Stage 2 — `calculationSnapshots` stays empty in every PR; runtime `CalculationSnapshot` / `CalculationResultBundle` live only in `packages/calculation-store`; disk persistence is deferred (S2-FU-07). Blocker 2: added `Reference type: validation_fixture` to GC-INVALID-LF-02 and GC-INVALID-LF-03. Non-blocking patches: tightened §5 branch-chain wording (no open gate **and** no out-of-service member); split §7.3 into branch voltage-drop status (§7.3.1) and bus voltage-band status (§7.3.2); split §10 warnings text into readiness vs result phases; deferred multi-utility / SC-equivalent PQ conversion (§4.3 / §6.2 / §11 `E-LF-003` / S2-FU-03) — Stage 2 MVP requires exactly one in-service utility; added Stage 2 PR #3 merge gate on S2-FU-01 hosting decision. Spec-only; no code/schema/fixture changes. |
 | Rev A.2 | 2026-05-02 | S2-FU-01 closed in writing as part of Stage 2 PR #3 (Solver Adapter Contract + Python Sidecar). §18 entry updated to point at `docs/stage-2/solver_adapter_hosting_decision.md` and `docs/stage-2/solver_adapter_contract.md`. Decision: Python sidecar service hosts pandapower; the TypeScript adapter contract is solver-agnostic and lives in `packages/solver-adapter`. No other spec sections changed; remaining follow-ups (S2-FU-02..08) unchanged. |
+| Rev A.3 | 2026-05-02 | Stage 2 closeout / acceptance closure (Stage 2 PR #1–#6 all merged). Spec-text fixes for documented mismatches: AC-S2-08 wording updated to match the PR #5 §7.4 clarification (failed `VoltageDropResult` with `E-VD-001`, not `null`); §16 PR #5 amended to record that Golden Case wiring (GC-LF-02 / GC-VD-01 / GC-INVALID-LF-01..03) did not actually ship in PR #5 and is deferred post-Stage-2 alongside the Golden Case schema extension (§12.7). New tooling closeout: `scripts/acceptance-coverage.json` extended with a `stage2` block mapping AC-S2-01..17 to verifying tests / files; `scripts/check-acceptance.ts` enforces both Stage 1 (AC01..AC23) and Stage 2 (AC-S2-01..17) coverage. AC-S2-11 (Golden Cases) is marked `deferred-post-stage-2`; AC-S2-13 maps to the Stage 1 manifest itself. No code, schema, fixture, or solver-sidecar behavior changes in this revision; the Stage 1 canonical project-file schema remains untouched and `calculationSnapshots` remains empty per spec §10 / §17. |
