@@ -1,0 +1,16 @@
+# Stage 2 PR #3 — sidecar skeleton.
+#
+# pandapower is intentionally NOT pinned in this PR. The hosting
+# decision (S2-FU-01) selects pandapower as the solver, and it will be
+# pinned exactly in Stage 2 PR #4 alongside the actual transport
+# wiring. PR #3 ships only the contract mirror and a health smoke
+# command — both of which run on a stock CPython install with no
+# scientific stack.
+#
+# When PR #4 lands, this file will pin:
+#   pandapower==<X.Y.Z>
+#   numpy==<...>
+#   scipy==<...>
+# (or the equivalent declarations under a pyproject.toml build
+# backend). The chosen version is reported back to the TypeScript
+# adapter via `SolverMetadata.solverVersion`.

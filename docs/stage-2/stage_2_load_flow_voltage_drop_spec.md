@@ -1358,12 +1358,18 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
 These are recorded to be closed by a later Stage 2 spec revision or by
 the corresponding implementation PR — they do not block Stage 2 PR #1.
 
-- **S2-FU-01** Solver hosting decision: pandapower as a Python sidecar
-  via stdio vs. WASM build. To be decided during the Stage 2 PR #3
-  spike. **Merge gate.** The Stage 2 PR #3 solver-adapter / pandapower
-  spike must not merge until S2-FU-01 is closed in writing
-  (recorded in this spec or a follow-up addendum). Until the decision
-  is closed, PR #3 stays in draft.
+- **S2-FU-01** ~~Solver hosting decision~~ **Closed (Stage 2 PR #3,
+  2026-05-02).** Decision: pandapower runs as an out-of-process
+  **Python sidecar service**. Browser/WASM, Node-native, and direct
+  Python child-process options were rejected. The TypeScript adapter
+  contract lives in `packages/solver-adapter` and contains no
+  pandapower element names; the sidecar skeleton lives in
+  `services/solver-sidecar/`. Full rationale, options analysis, version
+  pinning plan, security/process boundary, and MVP deployment model
+  are recorded in
+  `docs/stage-2/solver_adapter_hosting_decision.md`; the contract
+  shape is in `docs/stage-2/solver_adapter_contract.md`. The Stage 2
+  PR #3 merge gate on S2-FU-01 is satisfied by this entry.
 - **S2-FU-02** Project-level Voltage Drop limit settings (per voltage
   level, per equipment kind, per scenario). Deferred until after
   PR #5; Stage 2 ships with the static defaults of §7.2.
@@ -1402,3 +1408,4 @@ the corresponding implementation PR — they do not block Stage 2 PR #1.
 |---|---|---|
 | Rev A | 2026-05-02 | Initial Stage 2 spec. Closes S2-OQ-01 through S2-OQ-07; defines AppNetwork, topology extraction, branch_chain conversion policy, Load Flow / Voltage Drop assumptions, solver adapter contracts, result model, snapshot policy, Stage 2 codes, Golden Case candidates, adapter contract tests, UI impact, AC-S2-01..17, and the six-PR breakdown. Spec-only PR. |
 | Rev A.1 | 2026-05-02 | Spec-review patch. Blocker 1: tightened S2-OQ-06 / §9.4 / §10 / §16 / §17 / AC-S2-10 / AC-S2-12 / AC-S2-14 to state that the Stage 1 canonical project-file schema is unchanged for the entirety of Stage 2 — `calculationSnapshots` stays empty in every PR; runtime `CalculationSnapshot` / `CalculationResultBundle` live only in `packages/calculation-store`; disk persistence is deferred (S2-FU-07). Blocker 2: added `Reference type: validation_fixture` to GC-INVALID-LF-02 and GC-INVALID-LF-03. Non-blocking patches: tightened §5 branch-chain wording (no open gate **and** no out-of-service member); split §7.3 into branch voltage-drop status (§7.3.1) and bus voltage-band status (§7.3.2); split §10 warnings text into readiness vs result phases; deferred multi-utility / SC-equivalent PQ conversion (§4.3 / §6.2 / §11 `E-LF-003` / S2-FU-03) — Stage 2 MVP requires exactly one in-service utility; added Stage 2 PR #3 merge gate on S2-FU-01 hosting decision. Spec-only; no code/schema/fixture changes. |
+| Rev A.2 | 2026-05-02 | S2-FU-01 closed in writing as part of Stage 2 PR #3 (Solver Adapter Contract + Python Sidecar). §18 entry updated to point at `docs/stage-2/solver_adapter_hosting_decision.md` and `docs/stage-2/solver_adapter_contract.md`. Decision: Python sidecar service hosts pandapower; the TypeScript adapter contract is solver-agnostic and lives in `packages/solver-adapter`. No other spec sections changed; remaining follow-ups (S2-FU-02..08) unchanged. |

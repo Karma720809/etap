@@ -4,6 +4,7 @@
     { "path": "./packages/schemas" },
     { "path": "./packages/core-model" },
     { "path": "./packages/network-model" },
+    { "path": "./packages/solver-adapter" },
     { "path": "./packages/project-io" },
     { "path": "./packages/validation" },
     { "path": "./packages/fixtures" },
