@@ -825,16 +825,25 @@ The per-bus `status` field aggregates per-row warnings:
 | Bus was faulted; pandapower failed for that specific bus (NaN values, per-bus exception) | `failed` | all `null` |
 | Bus was **not** in the fault target list (orchestrator-synthesized row) | `unavailable` | all `null` |
 
-The top-level `status` follows the Stage 2 PR #5 derivation rule:
+The top-level `status` follows the Stage 2 PR #5 derivation rule. It
+is aligned with — and must stay consistent with — the
+sidecar→app top-level status mapping in §7.5.3:
 
-- `failed` if the run could not produce any per-bus row (e.g.,
-  sidecar failure, pandapower exception, missing slack data) — in
-  this case `busResults` may be empty.
-- `warning` if at least one per-bus row was `warning` and none were
-  `failed`.
-- `valid` otherwise. `unavailable` rows do **not** by themselves
-  flip the top-level status — they reflect the `mode === "specific"`
-  scoping decision, not a calculation failure.
+- `failed` if the run could not be normalized at all (transport
+  failure, pre-normalization sidecar exit, or any
+  `failed_validation` / `failed_solver` sidecar response). In this
+  case `busResults` may be empty.
+- `warning` if the run completed and **any** per-row `failed`
+  appears in `busResults`. A per-row failure does not block the
+  other rows; the top-level status reflects "the run completed with
+  warnings".
+- `warning` if the run completed with **at least one** per-row
+  `warning` and no per-row `failed`.
+- `valid` if the run completed with only `ok` and/or
+  `unavailable` per-row statuses **and** no top-level issues.
+  `unavailable` rows do **not** by themselves flip the top-level
+  status — they reflect the `mode === "specific"` scoping decision,
+  not a calculation failure.
 
 ### 7.4 What is intentionally NOT in the result
 
@@ -1255,7 +1264,11 @@ from this spec.
   carrying `normalizeShortCircuitResult()` (mirrors `results.ts`).
 - Edit: `packages/calculation-store/src/types.ts` widens
   `CalculationModule` to
-  `"load_flow_bundle" | "short_circuit_bundle"`.
+  `"load_flow_bundle" | "short_circuit_bundle"` and widens
+  `RuntimeCalculationRecord.bundle` from its current
+  `LoadFlowRunBundle`-specific type to
+  `LoadFlowRunBundle | ShortCircuitRunBundle` (discriminated union;
+  see §8.2 — the alternative generic shape is rejected for ergonomics).
 - Edit: `packages/calculation-store/src/reducer.ts` to handle the
   new module's retention slot under the existing
   `(scenarioId, module, subCase)` key.
@@ -1427,4 +1440,5 @@ PR #1.
 | Revision | Date | Description |
 |---|---|---|
 | Rev A | 2026-05-02 | Initial Stage 3 spec. Closes S3-OQ-01 through S3-OQ-10; defines Short Circuit MVP scope (3-phase bolted bus faults, IEC 60909 maximum case), required inputs, AppNetwork / SolverInput reuse policy (no pandapower leakage), sidecar `run_short_circuit` command contract, `ShortCircuitResult` runtime type, runtime-snapshot / calculation-store impact, UI plan, `E-SC-*` / `W-SC-*` codes, AC-S3-01..07, and the six-PR implementation breakdown. Spec-only PR. No code, schema, fixture, or solver-sidecar changes. |
+| Rev A.2 | 2026-05-02 | Spec-text-only consistency patch for PR #11 Codex re-review. §7.3 top-level status prose realigned with §7.5.3: a completed run with **any** per-row `failed` now resolves to top-level `warning` (not `valid`); `valid` requires only `ok` / `unavailable` per-row statuses and no top-level issues; transport / pre-normalization failures resolve to `failed`. §13 PR #4 implementation breakdown extended: the `RuntimeCalculationRecord.bundle` widening from `LoadFlowRunBundle`-specific to a discriminated `LoadFlowRunBundle \| ShortCircuitRunBundle` union (already documented in §8.2) is now also called out in PR #4's edit list. No code, schema, fixture, or solver-sidecar changes. |
 | Rev A.1 | 2026-05-02 | Spec-text-only patch for PR #11 Codex review. Blocker 1 (numeric nullability): §7.1 prose and §7.2 `ShortCircuitBusResult` updated so every per-bus numeric output (`ikssKa`, `ipKa`, `ithKa`, `skssMva`) is `number \| null`; §7.3 status table now records that `failed` and `unavailable` rows carry all-null numerics; non-computable rows are kept in `busResults` rather than omitted. Blocker 2 (sidecar wire shape vs app-normalized result): §6.3 explicitly names the wire shape as the solver/contract boundary using `internalId` + `status: "valid"\|"warning"\|"failed"`; new §7.5 defines the orchestrator's field-rename mapping (`internalId → busInternalId`), per-row status mapping (`valid → ok`; `failed → "failed"` for targeted-but-failed rows; `"unavailable"` synthesized only by the orchestrator for non-targeted buses), and top-level status mapping. Non-blocking cleanup: §6.3 response example grew an explicit `shortCircuit` block to match §6.4; §7.2 `ShortCircuitResult.module` doc-comment clarifies it is the app result-API module name and is distinct from the calculation-store retention key `"short_circuit_bundle"` (§8.2); §8.2 records that `RuntimeCalculationRecord.bundle` (currently `LoadFlowRunBundle`-specific) must be widened to a discriminated union when `ShortCircuitRunBundle` lands in PR #4. Spec-only; no code, schema, fixture, or solver-sidecar changes. |
