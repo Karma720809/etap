@@ -171,3 +171,96 @@ class SolverResult(TypedDict):
     buses: List[SolverBusResult]
     branches: List[SolverBranchResult]
     issues: List[SolverIssue]
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 PR #2 — Short Circuit contract mirror.
+#
+# Source of truth: ``packages/solver-adapter/src/shortCircuit.ts``. Drift
+# becomes a contract-test failure once the transport call lands in Stage 3
+# PR #3. PR #2 only documents the shape on the Python side so the sidecar
+# code lives next to the contract; no ``run_short_circuit`` dispatcher is
+# wired in this PR.
+# ---------------------------------------------------------------------------
+
+
+SHORT_CIRCUIT_COMMAND = "run_short_circuit"
+
+ShortCircuitFaultType = Literal["threePhase"]
+ShortCircuitCase = Literal["maximum"]
+ShortCircuitMode = Literal["all_buses", "specific"]
+ShortCircuitSidecarBusRowStatus = Literal["valid", "warning", "failed"]
+ShortCircuitSidecarResponseStatus = SolverResultStatus
+ShortCircuitIssueSeverity = Literal["error", "warning"]
+ShortCircuitIssueCode = Literal[
+    "E-SC-001",
+    "E-SC-002",
+    "E-SC-003",
+    "E-SC-004",
+    "E-SC-005",
+    "E-SC-006",
+    "W-SC-001",
+    "W-SC-002",
+    "W-SC-003",
+]
+
+
+class ShortCircuitFaultTarget(TypedDict):
+    busInternalId: str
+
+
+class ShortCircuitOptions(TypedDict):
+    faultType: ShortCircuitFaultType
+    calculationCase: ShortCircuitCase
+    computePeak: bool
+    computeThermal: bool
+
+
+class ShortCircuitRequest(TypedDict):
+    solverInput: SolverInput
+    mode: ShortCircuitMode
+    faultTargets: List[ShortCircuitFaultTarget]
+    shortCircuitOptions: ShortCircuitOptions
+
+
+class ShortCircuitSidecarMetadataBlock(TypedDict):
+    calculationCase: ShortCircuitCase
+    faultType: ShortCircuitFaultType
+    computePeak: bool
+    computeThermal: bool
+    voltageFactor: float
+
+
+class _ShortCircuitSidecarBusRowRequired(TypedDict):
+    internalId: str
+    voltageLevelKv: Optional[float]
+    ikssKa: Optional[float]
+    ipKa: Optional[float]
+    ithKa: Optional[float]
+    skssMva: Optional[float]
+    status: ShortCircuitSidecarBusRowStatus
+
+
+class ShortCircuitSidecarBusRow(_ShortCircuitSidecarBusRowRequired, total=False):
+    # ``issueCodes`` is the only optional field — every numeric value is
+    # required but nullable, mirroring the TypeScript contract.
+    issueCodes: List[ShortCircuitIssueCode]
+
+
+class _ShortCircuitWireIssueRequired(TypedDict):
+    code: ShortCircuitIssueCode
+    severity: ShortCircuitIssueSeverity
+    message: str
+
+
+class ShortCircuitWireIssue(_ShortCircuitWireIssueRequired, total=False):
+    internalId: str
+    field: str
+
+
+class ShortCircuitSidecarResponse(TypedDict):
+    status: ShortCircuitSidecarResponseStatus
+    metadata: SolverMetadata
+    shortCircuit: ShortCircuitSidecarMetadataBlock
+    buses: List[ShortCircuitSidecarBusRow]
+    issues: List[ShortCircuitWireIssue]
