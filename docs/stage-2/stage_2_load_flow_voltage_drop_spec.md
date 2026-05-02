@@ -97,13 +97,33 @@ them as independent jobs would force the user to run Load Flow twice.
 
 ### S2-OQ-06 — First real calculation snapshot timing
 
-**Decision.** Stage 2 PR #1 (this spec) and the early network-model PRs
-(Stage 2 PR #2, PR #3) **must not** create real `calculationSnapshots`
-entries. The first real snapshot is allowed only after the Load Flow result
-model schema is finalized — i.e., starting at Stage 2 PR #4 (§16).
+**Decision.** Stage 2 must **not** modify the Stage 1 canonical
+project-file schema. The Stage 1 `calculationSnapshots` field on the
+project file remains reserved and **always empty** for the entirety of
+Stage 2.
 
-Until then, `calculationSnapshots` continues to follow the Stage 1
-guardrail: optional empty array, schema-reserved, no real entries.
+Stage 2 PR #1 (this spec) and the early network-model PRs (Stage 2
+PR #2, PR #3) must not create real `CalculationSnapshot` instances of
+any kind. The **first real runtime `CalculationSnapshot`** is allowed
+only after the Load Flow result model schema is finalized — i.e.,
+starting at Stage 2 PR #4 (§16). When PR #4 ships:
+
+1. Real runtime `CalculationSnapshot` and `CalculationResultBundle`
+   types live in a Stage 2 in-memory runtime result-store (or a
+   separate calculation-store schema), **not inside the Stage 1
+   canonical project file**.
+2. Runtime result bundles reference a runtime `snapshotId`. That
+   runtime `snapshotId` is never written into the project file's
+   `calculationSnapshots` array.
+3. The project file's `calculationSnapshots` field continues to
+   follow Stage 1 Rev D §6 / §50: optional, empty array, schema
+   reserved, no real entries.
+4. **Disk persistence of runtime snapshots / result bundles is
+   deferred** beyond Stage 2 (see S2-FU-07). If persistence is
+   required later, it must be done by introducing a new project-file
+   schema version, or by introducing a sidecar result-store file with
+   its own schema — not by silently writing into the Stage 1 Rev D
+   canonical schema.
 
 ### S2-OQ-07 — pandapower result as Golden Case reference
 
@@ -183,10 +203,12 @@ Stage 2 must preserve the Stage 1 guardrails listed in the implementation
 notes and PRD:
 
 - `calculationResults` is **not** introduced into the canonical project
-  schema. (Result bundles live in a Stage 2 result store, referenced by
-  `snapshotId`.)
+  schema. (Result bundles live in a Stage 2 in-memory result store,
+  referenced by a runtime `snapshotId`.)
+- The Stage 1 canonical project-file schema is **unchanged** for the
+  entirety of Stage 2.
 - `calculationSnapshots` remains an optional empty array on the project
-  file until §9 conditions are met.
+  file in **every** Stage 2 PR (see §10 / S2-OQ-06).
 - No fake calculations.
 - Transformer-as-node in the project file (§S2-OQ-04).
 - `branch_chain` ordering is upstream-to-downstream and never sorted.
@@ -425,11 +447,16 @@ Topology extraction returns one of:
   a valid `AppNetwork` with no loads and no motors. The solver run is
   trivial but legal. UI shows a result of "no loaded buses" rather than
   blocking.
-- **Project with multiple in-service utility sources.** Stage 2 picks the
-  first by deterministic ordering (sorted by `internalId`) as the slack;
-  remaining utilities are converted to PQ-equivalents using their
-  `pMw`/`qMvar` derived from short-circuit equivalents — or, if not
-  derivable, `E-LF-003` is raised. (Multi-slack merging is deferred.)
+- **Project with multiple in-service utility sources.** Multi-utility
+  / multi-slack handling is **deferred** for Stage 2 MVP. The Stage 2
+  MVP supports exactly one in-service utility as the slack/source
+  (chosen by deterministic ordering: lexically smallest `internalId`)
+  plus optional `grid_parallel_pq` generators on other buses. If two
+  or more utilities are simultaneously `in_service`, the extractor
+  raises `E-LF-003 source/slack invalid` and blocks the run. There is
+  **no** Stage 2 implementation of short-circuit-equivalent
+  PQ conversion; that conversion remains S2-FU-03 and must not be
+  implemented unless a future Golden Case forces it.
 - **Generator with `operatingMode: pv_voltage_control` or
   `island_isochronous`.** Excluded from Stage 2 solver and reported via
   `W-GEN-001` (Stage 1 code retained) and additionally raises
@@ -459,8 +486,13 @@ rule set:
    - `state: "open"` or `status: "out_of_service"` → path disabled; the
      `branch_chain` is removed from the AppNetwork.
 3. A `cable` member of a `branch_chain` becomes a `NetworkCableBranch`
-   (a solver line) **iff** the entire path is enabled (no upstream open
-   gates and no out-of-service equipment).
+   (a solver line) **iff** the entire path is enabled. "Entire path
+   enabled" means: no member of the `branch_chain` is an open
+   breaker/switch, and no member of the `branch_chain` (cable, breaker,
+   switch) is `status: "out_of_service"`. A single open or out-of-service
+   member anywhere in the chain — upstream or downstream of the cable
+   — disables the whole path; the cable is excluded from the
+   `AppNetwork`.
 4. Stage 2 **does not** model breaker / switch impedance; this is a
    decision recorded in S2-OQ-02. A future stage may revisit.
 5. Branch-chain endpoint mismatch (`W-NET-001`) remains a warning at the
@@ -506,7 +538,7 @@ For an in-scope `AppNetwork`:
 | Frequency | Project `frequencyHz` (50 or 60). One frequency per run. |
 | Load model | Constant **PQ** load (`pMw`, `qMvar`). No ZIP, no constant-current. |
 | Reactive power source | `pMw` + `qMvar` if both entered; otherwise `pMw` + `pf` → `qMvar`. If neither is derivable, `E-VD-002` (load input missing). |
-| Utility / Grid | Slack source. SC level converts to a Thevenin-equivalent voltage source for cases where the solver requires it; otherwise treated as ideal slack. |
+| Utility / Grid | Slack source — Stage 2 MVP supports exactly one in-service utility (lexically smallest `internalId`). Two or more in-service utilities raise `E-LF-003`. Stage 2 treats the chosen utility as the slack with `vnKv` = nominal voltage and `voltageFactor` (default 1.0) on the slack bus; SC-level / fault-current values are kept on the `NetworkSource` for traceability but are **not** converted into PQ equivalents in Stage 2 MVP. (Short-circuit-equivalent PQ conversion is S2-FU-03, deferred.) |
 | Generator | Allowed only with `operatingMode ∈ { out_of_service, grid_parallel_pq }`. `out_of_service` is excluded; `grid_parallel_pq` is a PQ injection on its bus. |
 | PV mode | **Not supported** in Stage 2. `pv_voltage_control` raises `W-GEN-001`; if it is the only source, `E-LF-003`. |
 | Island / isochronous mode | **Not supported**. Same rule as PV mode. |
@@ -584,13 +616,35 @@ into a project-level Stage 2 setting after PR #5.
 
 ### 7.3 Status mapping
 
-For each branch and each bus:
+Two distinct status mappings exist; they are computed independently.
+
+#### 7.3.1 Branch voltage-drop status
+
+Applied to each `BranchVoltageDrop` row. Compares the per-branch
+`voltageDropPct` against that branch's `limitPct`:
 
 | Condition | `status` |
 |---|---|
 | `voltageDropPct ≤ 0.9 × limitPct` | `ok` |
-| `0.9 × limitPct < voltageDropPct ≤ limitPct` | `warning` |
-| `voltageDropPct > limitPct` | `violation` |
+| `0.9 × limitPct < voltageDropPct ≤ limitPct` | `warning` (raises `W-VD-002`) |
+| `voltageDropPct > limitPct` | `violation` (raises `W-VD-001`) |
+
+#### 7.3.2 Bus voltage-band status
+
+Applied to each `BusResult` row. Compares the bus per-unit voltage
+against the bus's own `minVoltagePct` / `maxVoltagePct` band (when
+entered on the canonical `Bus` record):
+
+| Condition | `status` |
+|---|---|
+| `minVoltagePct ≤ voltagePuPct ≤ maxVoltagePct` | `ok` |
+| `voltagePuPct < minVoltagePct` | `warning` (raises `W-LF-001`) |
+| `voltagePuPct > maxVoltagePct` | `warning` (raises `W-LF-002`) |
+
+If a bus has no `minVoltagePct` / `maxVoltagePct` entered, the bus
+voltage-band status defaults to `ok` and no `W-LF-001` / `W-LF-002` is
+raised. Branch voltage-drop status is computed from `limitPct`
+defaults (§7.2) and is independent of bus band status.
 
 ### 7.4 Dependency on Load Flow
 
@@ -826,13 +880,20 @@ export interface BranchVoltageDrop {
 
 - `CalculationResultBundle` is held in an in-memory store
   (`packages/calculation-store`). Stage 2 does not persist the bundle to
-  the project file.
-- `CalculationSnapshot` may be persisted into the project file's
-  `calculationSnapshots` array (Stage 1 schema-reserved field). See §9.5
-  for when this is allowed.
-- The canonical project schema is **not extended** with a result field.
-  This preserves the Stage 1 guardrail that the project file carries
-  inputs only, never derived results.
+  the project file or to disk in any form.
+- `CalculationSnapshot` is also a runtime-only in-memory object held by
+  `packages/calculation-store`. Stage 2 does **not** write
+  `CalculationSnapshot` into the Stage 1 project file's
+  `calculationSnapshots` array. That array remains empty and
+  schema-reserved per Stage 1 Rev D §6 / §50 (see S2-OQ-06).
+- The canonical project schema is **not extended** with a result field
+  and is **not modified** for Stage 2. This preserves the Stage 1
+  guardrail that the project file carries inputs only, never derived
+  results.
+- Disk persistence of runtime snapshots / bundles is deferred (see
+  S2-FU-07). Any later persistence must come through a new project-file
+  schema version or a sidecar result-store file, not through silent
+  edits to Stage 1 Rev D.
 
 ### 9.5 Stale-result policy
 
@@ -852,13 +913,15 @@ export interface BranchVoltageDrop {
 This is the operational form of S2-OQ-06.
 
 1. **Stage 1 + Stage 2 PR #1 (this spec) + Stage 2 PR #2 + Stage 2 PR #3**:
-   `calculationSnapshots` remains the empty array per Stage 1 Rev D §6 /
-   §50. Topology extraction and adapter spike code MAY emit `AppNetwork`
-   in memory, but MUST NOT serialize a real `CalculationSnapshot` into
-   the project file.
+   No real `CalculationSnapshot` is created in any layer. The Stage 1
+   project file's `calculationSnapshots` field remains the empty array
+   per Stage 1 Rev D §6 / §50. Topology extraction and adapter spike
+   code MAY emit `AppNetwork` in memory, but MUST NOT instantiate a
+   real `CalculationSnapshot`.
 2. **Starting at Stage 2 PR #4** (Load Flow result normalization +
-   first Golden Case): real snapshots are allowed. The snapshot must
-   carry, at minimum:
+   first Golden Case): real **runtime** `CalculationSnapshot` instances
+   are allowed in `packages/calculation-store`. A runtime snapshot
+   carries, at minimum:
    - `snapshotId`
    - `createdAt`
    - `scenarioId`
@@ -866,17 +929,27 @@ This is the operational form of S2-OQ-06.
    - the `validation` from `validateForCalculation()`
    - solver name / version / options
    - adapter version
-3. The `CalculationSnapshotPlaceholder` schema in Stage 1 Rev D §5.2
-   currently allows only `status: "placeholder_reserved"`. Stage 2 PR #4
-   will extend the union (additive; no breaking change to existing
-   files) to a `CalculationSnapshotV2` form. Until then, the schema
-   stays as-is.
-4. **Result references** the snapshot via `snapshotId`; the project file
-   never contains the result bundle itself.
-5. **Retention** follows Stage 1 OQ-15 once snapshots are enabled:
+3. The Stage 1 canonical schema (`CalculationSnapshotPlaceholder` in
+   Stage 1 Rev D §5.2, the Zod schema, and the JSON schema) is **not
+   modified** in Stage 2. The project file's `calculationSnapshots`
+   array remains empty across every Stage 2 PR. There is no
+   `CalculationSnapshotV2` admitted into the project-file schema in
+   Stage 2.
+4. **Result references** the runtime snapshot via its runtime
+   `snapshotId`. The runtime `snapshotId` is **not written** into the
+   project file. The project file never contains the result bundle
+   itself.
+5. **Retention** follows Stage 1 OQ-15 once runtime snapshots are
+   enabled, and applies inside the in-memory store only:
    - Latest successful result per `(scenarioId, module, subCase)`.
-   - Latest failed validation snapshot (so the user can audit the failure).
+   - Latest failed validation snapshot (so the user can audit the
+     failure).
    - No unlimited history in MVP.
+6. **Disk persistence is deferred** (S2-FU-07). If a future stage
+   persists results to disk, it must do so through a new project-file
+   schema version, or via a sidecar result-store file with its own
+   schema, not by silently writing into the Stage 1 Rev D canonical
+   schema.
 
 ### 10.1 Calculation-readiness validation function
 
@@ -910,9 +983,24 @@ Calculation must be **blocked** when any of the following are present:
   specific code may be added in Stage 2 PR #4 if needed.)
 - Non-positive numeric calculation input. (`E-EQ-002`.)
 
-Warnings (`W-LF-*` / `W-VD-*` / `W-EQ-*`) are surfaced in the
-calculation-readiness summary but **must not** block the run; they must
-be visible in the UI before the user clicks Run.
+Warnings come in two phases and must not be conflated.
+
+**Readiness warnings (visible before Run).** Editor- and
+readiness-time warnings derived purely from project inputs:
+`W-EQ-002`, `W-EQ-003`, `W-EQ-004`, `W-CBL-001`, `W-NET-001`,
+`W-GEN-001`. These are surfaced in the calculation-readiness summary
+and must be visible in the UI before the user clicks Run. They must
+not block the run.
+
+**Result warnings (visible only after a successful run).** Warnings
+that depend on solver output: `W-LF-001` (bus undervoltage),
+`W-LF-002` (bus overvoltage), `W-LF-003` (equipment loading),
+`W-VD-001` (voltage drop exceeds limit), `W-VD-002` (voltage drop
+near limit). These are populated on the `CalculationResultBundle` /
+`LoadFlowResult` / `VoltageDropResult` after a successful Load Flow,
+and are surfaced in the result tables and diagram overlay. They are
+**not** available in the readiness summary and must not be presented
+as readiness signals.
 
 ---
 
@@ -928,7 +1016,7 @@ convention.
 |---|---|---|---|
 | `E-LF-001` | error | Load Flow non-convergence (solver iteration limit reached, divergence). | Load Flow result is `null`; bundle status `failed_solver`. |
 | `E-LF-002` | error | Unsupported topology in `AppNetwork` (e.g., 1P/DC bus, transformer winding voltage mismatch). | Run blocked. |
-| `E-LF-003` | error | Source / slack invalid (no in-service slack-eligible source, multi-slack ambiguity that cannot be resolved). | Run blocked. |
+| `E-LF-003` | error | Source / slack invalid: no in-service slack-eligible source, **or** two or more in-service utilities (multi-utility is deferred per S2-FU-03), **or** the only in-service generator is in an unsupported mode (`pv_voltage_control` / `island_isochronous`). | Run blocked. |
 | `E-LF-004` | error | Solver adapter failure (pandapower exception, version mismatch, IPC failure). | Run failed. |
 | `E-LF-005` | error | Load Flow result unavailable (pre-run state when bundle is requested before a successful run). | Diagnostic. |
 | `E-VD-001` | error | Voltage Drop unavailable because Load Flow is invalid. | Voltage Drop is `null`. |
@@ -1027,6 +1115,8 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
 
 - **Purpose.** Project with buses/loads but no in-service utility or
   generator.
+- **Reference type.** `validation_fixture` (no numeric reference
+  needed; assertion is on emitted codes and `appNetwork = null`).
 - **Reference status.** `verified`.
 - **Expected behavior.** `validateProject()` returns `E-NET-001`;
   `validateForCalculation()` keeps it as error; readiness wrapper sets
@@ -1036,6 +1126,8 @@ Each Golden Case lists `referenceType` and `referenceStatus`.
 
 - **Purpose.** A `1P2W` bus with an attached load, otherwise
   source-fed.
+- **Reference type.** `validation_fixture` (no numeric reference
+  needed; assertion is on emitted codes and `appNetwork = null`).
 - **Reference status.** `verified`.
 - **Expected behavior.** Editor warns `W-EQ-002`. Calculation readiness
   raises `E-LF-002`. Run blocked.
@@ -1143,11 +1235,11 @@ status placeholder.
 | AC-S2-07 | Voltage Drop result is derived from Load Flow and displayed in the Voltage Drop result table with sending / receiving voltage, drop %, limit %, status. |
 | AC-S2-08 | When Load Flow is invalid, Voltage Drop is `null` and `E-VD-001` is reported; the bundle's `voltageDrop` field is null and the table shows the empty state. |
 | AC-S2-09 | An input edit that affects the AppNetwork marks the latest bundle as `stale`, status `"stale"`, and the diagram overlay is dimmed. |
-| AC-S2-10 | After Stage 2 PR #4 ships, a successful run produces a `CalculationSnapshot` and a `CalculationResultBundle` whose `snapshotId` references the snapshot. |
+| AC-S2-10 | After Stage 2 PR #4 ships, a successful run produces a runtime `CalculationSnapshot` (in `packages/calculation-store`) and a `CalculationResultBundle` whose `snapshotId` references that runtime snapshot. The project file's `calculationSnapshots` array remains empty. |
 | AC-S2-11 | Each Stage 2 Golden Case (`GC-LF-01`, `GC-LF-02`, `GC-VD-01`, `GC-INVALID-LF-01`, `GC-INVALID-LF-02`, `GC-INVALID-LF-03`) passes within tolerance (§12). |
-| AC-S2-12 | The canonical project schema (`packages/schemas/`) does not contain any pandapower types or imports; canonical drift test still passes. |
+| AC-S2-12 | The canonical project schema (`packages/schemas/`) is unchanged across every Stage 2 PR; it contains no pandapower types or imports; the canonical drift test still passes. |
 | AC-S2-13 | All Stage 1 acceptance tests (AC01..AC23) remain green after Stage 2 PRs. |
-| AC-S2-14 | `calculationSnapshots` remains empty in projects produced by PRs that pre-date PR #4 (this spec PR / network model PR / adapter spike). |
+| AC-S2-14 | The project file's `calculationSnapshots` array remains empty in **every** Stage 2 PR (PR #1 through PR #6). Real runtime snapshots (PR #4 onward) live only in `packages/calculation-store` and are never serialized into the project file. |
 | AC-S2-15 | Adapter contract tests (S2-ADP-01..08) all pass. |
 | AC-S2-16 | The Run button is disabled with explanatory codes whenever readiness is `blocked_by_validation`. |
 | AC-S2-17 | No fake calculation result is ever returned: failed runs surface issues, not zeros. |
@@ -1175,8 +1267,9 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
 - Adapter contract tests `S2-ADP-01..03`.
 - New Stage 2 codes wired in but **not** raised as Stage 1 validation
   output: instead they appear in `NetworkBuildResult.issues`.
-- `calculationSnapshots` policy unchanged (still empty in fixtures and
-  saved files).
+- The Stage 1 canonical project-file schema is **not modified**; the
+  project file's `calculationSnapshots` array remains empty in
+  fixtures and saved files.
 
 ### Stage 2 PR #3 — Solver adapter contract + pandapower spike
 
@@ -1184,17 +1277,23 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
 - Internal pandapower wiring (Python sidecar or WASM, decision in
   PR #3 — out of scope here).
 - Adapter contract tests `S2-ADP-04..05`.
-- No real `CalculationSnapshot` written yet; spike runs end-to-end in
-  memory and is gated behind a feature flag.
+- No real `CalculationSnapshot` instantiated yet; spike runs
+  end-to-end in memory and is gated behind a feature flag. The
+  project file's `calculationSnapshots` field remains empty.
+- **Merge gate.** PR #3 must not merge until the solver-hosting
+  decision (S2-FU-01) is closed in writing. If the decision is still
+  open, PR #3 stays in draft.
 
 ### Stage 2 PR #4 — Load Flow result normalization + first Golden Case
 
 - New package `packages/calculation` providing the result model in §9
   and `runLoadFlow(scenarioId): CalculationResultBundle`.
-- Schema-additive change to `CalculationSnapshotPlaceholder` to admit
-  Stage 2 snapshot shape (`CalculationSnapshotV2`) — backwards
-  compatible at the file level.
-- First real `CalculationSnapshot` permitted (S2-OQ-06).
+- **No change to the Stage 1 canonical project-file schema.** No new
+  variant is admitted into `CalculationSnapshotPlaceholder`; the
+  project file's `calculationSnapshots` array continues to be empty.
+- First real **runtime** `CalculationSnapshot` permitted in
+  `packages/calculation-store` (S2-OQ-06). Runtime snapshots are
+  in-memory only and are not written to disk.
 - GC-LF-01 promoted to `verified`.
 - New `validateForCalculation` integration with topology issues.
 
@@ -1221,10 +1320,14 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
 
 - **Do not modify** the Stage 1 canonical schema
   (`packages/schemas/src/stage_1_project_schema.rev_d.zod.ts`,
-  `packages/schemas/stage_1_project_file.rev_d.schema.json`). Stage 2
-  schema additions for snapshots are made through additive extension of
-  `CalculationSnapshotPlaceholder` in PR #4 and must keep the canonical
-  drift test passing.
+  `packages/schemas/stage_1_project_file.rev_d.schema.json`). The
+  Stage 1 canonical project file is unchanged for the entirety of
+  Stage 2. Real snapshots / result bundles are runtime-only objects in
+  `packages/calculation-store`; they are never written into the
+  project file's `calculationSnapshots` array. Disk persistence (if
+  ever needed) requires a new project-file schema version or a
+  separate sidecar result-store schema (S2-FU-07), not silent edits to
+  Stage 1 Rev D. The canonical drift test continues to pass.
 - **Do not reintroduce** PRD §8 illustrative names (`bus`, `inService`,
   etc.) into the canonical schema or Stage 2 types.
 - **Do not break** Stage 1 tests. AC01–AC23 continue to be the
@@ -1233,8 +1336,11 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
   spec-only.
 - **Do not create** fake calculation outputs in any Stage 2 PR. Failed
   runs show issues, not numbers.
-- **Do not populate** `calculationSnapshots` until §9 / §10 conditions
-  are met (i.e., starting at Stage 2 PR #4).
+- **Do not populate** the project file's `calculationSnapshots` array
+  in **any** Stage 2 PR. Runtime `CalculationSnapshot` objects (allowed
+  starting at Stage 2 PR #4 per §9 / §10) live in
+  `packages/calculation-store` and are never serialized into the
+  project file.
 - **Preserve** transformer-as-node in the project / UI layer
   (S2-OQ-04). Conversion to a calculation branch happens only inside
   `packages/network-model`.
@@ -1253,13 +1359,22 @@ These are recorded to be closed by a later Stage 2 spec revision or by
 the corresponding implementation PR — they do not block Stage 2 PR #1.
 
 - **S2-FU-01** Solver hosting decision: pandapower as a Python sidecar
-  via stdio vs. WASM build. To be decided in Stage 2 PR #3 spike.
+  via stdio vs. WASM build. To be decided during the Stage 2 PR #3
+  spike. **Merge gate.** The Stage 2 PR #3 solver-adapter / pandapower
+  spike must not merge until S2-FU-01 is closed in writing
+  (recorded in this spec or a follow-up addendum). Until the decision
+  is closed, PR #3 stays in draft.
 - **S2-FU-02** Project-level Voltage Drop limit settings (per voltage
   level, per equipment kind, per scenario). Deferred until after
   PR #5; Stage 2 ships with the static defaults of §7.2.
-- **S2-FU-03** Multi-utility / multi-slack handling beyond the
-  "first by `internalId`" rule (§4.3). Deferred to Stage 2 PR #4 if a
-  Golden Case requires it.
+- **S2-FU-03** Multi-utility / multi-slack handling, including any
+  short-circuit-equivalent → PQ conversion. **Deferred for Stage 2 MVP**:
+  the MVP supports exactly one in-service utility slack/source plus
+  optional `grid_parallel_pq` generators (§4.3, §6.2). Multiple
+  in-service utilities raise `E-LF-003`. This must not be implemented
+  unless a future Golden Case explicitly forces it; if it is, both the
+  conversion formula and a verified reference must be added before
+  release.
 - **S2-FU-04** Whether to deduplicate snapshots when an `AppNetwork`
   serializes byte-identical across runs (§9.3). Performance-only
   optimization; deferred.
@@ -1268,9 +1383,14 @@ the corresponding implementation PR — they do not block Stage 2 PR #1.
 - **S2-FU-06** Motor starting voltage drop scope: stay deferred or be
   added as a Stage 2 extension after PR #6. Decision after PR #5
   feedback.
-- **S2-FU-07** Whether `ResultBundle` is ever persisted to disk
-  (currently §9.4 says no). Stage 2 ships in-memory; long-term storage
-  may be revisited at the post-MVP report-export stage.
+- **S2-FU-07** Whether runtime `CalculationSnapshot` / `ResultBundle`
+  are ever persisted to disk. Stage 2 says **no** (§9.4 / §10): both
+  are in-memory only and the Stage 1 canonical project file's
+  `calculationSnapshots` array is not written to. Any future
+  persistence must come through a new project-file schema version, or
+  via a sidecar result-store file with its own schema; it must not
+  silently change Stage 1 Rev D. Likely to be revisited at the
+  post-MVP report-export stage.
 - **S2-FU-08** UI affordance for "compare two snapshots" — not in
   Stage 2 MVP, but the result store is shaped to allow it later.
 
@@ -1281,3 +1401,4 @@ the corresponding implementation PR — they do not block Stage 2 PR #1.
 | Revision | Date | Description |
 |---|---|---|
 | Rev A | 2026-05-02 | Initial Stage 2 spec. Closes S2-OQ-01 through S2-OQ-07; defines AppNetwork, topology extraction, branch_chain conversion policy, Load Flow / Voltage Drop assumptions, solver adapter contracts, result model, snapshot policy, Stage 2 codes, Golden Case candidates, adapter contract tests, UI impact, AC-S2-01..17, and the six-PR breakdown. Spec-only PR. |
+| Rev A.1 | 2026-05-02 | Spec-review patch. Blocker 1: tightened S2-OQ-06 / §9.4 / §10 / §16 / §17 / AC-S2-10 / AC-S2-12 / AC-S2-14 to state that the Stage 1 canonical project-file schema is unchanged for the entirety of Stage 2 — `calculationSnapshots` stays empty in every PR; runtime `CalculationSnapshot` / `CalculationResultBundle` live only in `packages/calculation-store`; disk persistence is deferred (S2-FU-07). Blocker 2: added `Reference type: validation_fixture` to GC-INVALID-LF-02 and GC-INVALID-LF-03. Non-blocking patches: tightened §5 branch-chain wording (no open gate **and** no out-of-service member); split §7.3 into branch voltage-drop status (§7.3.1) and bus voltage-band status (§7.3.2); split §10 warnings text into readiness vs result phases; deferred multi-utility / SC-equivalent PQ conversion (§4.3 / §6.2 / §11 `E-LF-003` / S2-FU-03) — Stage 2 MVP requires exactly one in-service utility; added Stage 2 PR #3 merge gate on S2-FU-01 hosting decision. Spec-only; no code/schema/fixture changes. |
