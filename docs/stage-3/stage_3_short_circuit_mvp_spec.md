@@ -561,7 +561,16 @@ Stage 3 inherits the Stage 2 hosting decision
 
 ### 6.3 Sidecar request / response shape
 
-Wire format is JSON-Lines, identical to Stage 2.
+Wire format is JSON-Lines, identical to Stage 2. The sidecar response
+shape below is the **solver/contract boundary** — it uses solver-side
+field names (`internalId`, `status: "valid" | "warning" | "failed"`)
+that mirror the existing Stage 2 `SolverResult` vocabulary. The
+TypeScript orchestrator normalizes this wire shape into the
+app-side `ShortCircuitResult` per §7.5. The two shapes are
+intentionally distinct: the wire response carries only what the
+sidecar actually computed, and the app result carries the
+app-vocabulary projection plus any synthesized rows for buses that
+were not part of the fault target list.
 
 Request (one line on stdin):
 
@@ -585,8 +594,13 @@ Response (one line on stdout):
 {
   "status": "succeeded" | "failed_validation" | "failed_solver",
   "metadata": { /* SolverMetadata — see §6.4 */ },
-  "calculationCase": "maximum",
-  "faultType": "threePhase",
+  "shortCircuit": {
+    "calculationCase": "maximum",
+    "faultType": "threePhase",
+    "computePeak": true,
+    "computeThermal": true,
+    "voltageFactor": 1.0
+  },
   "buses": [
     {
       "internalId": "BUS-MV",
@@ -595,7 +609,8 @@ Response (one line on stdout):
       "ipKa": 41.18,
       "ithKa": 19.05,
       "skssMva": 351.2,
-      "status": "valid" | "warning" | "failed"
+      "status": "valid" | "warning" | "failed",
+      "issueCodes": []
     }
   ],
   "issues": [
@@ -603,6 +618,17 @@ Response (one line on stdout):
   ]
 }
 ```
+
+Every per-bus numeric field on the wire (`ikssKa`, `ipKa`, `ithKa`,
+`skssMva`) is **nullable**: when pandapower returns NaN for a row, or
+when the corresponding `computePeak` / `computeThermal` flag was
+disabled, the sidecar emits `null` for the affected field rather than
+fabricating a value (§7.1). Rows that the sidecar could not compute at
+all (e.g., a per-bus pandapower exception) are still emitted with
+`status: "failed"` and all numeric fields `null`. The sidecar response
+**never** contains rows for buses outside the fault target set —
+"unavailable" is an app-side status synthesized by the orchestrator
+(§7.5).
 
 ### 6.4 Solver metadata
 
@@ -616,10 +642,12 @@ sidecar populates:
   the TypeScript adapter semver before normalization, identical to
   Load Flow).
 - `options`: the **Stage 2 `SolverOptions`** still travels through
-  unchanged; `ShortCircuitOptions` lives on a separate
-  `shortCircuit` block on the result envelope so that retention
-  consumers can record both without tripping on Load Flow's NR
-  options.
+  unchanged on `metadata.options`; the short-circuit-specific options
+  (`calculationCase`, `faultType`, `computePeak`, `computeThermal`,
+  effective `voltageFactor`) live on a separate `shortCircuit` block
+  on the result envelope (see the response example in §6.3) so that
+  retention consumers can record both without tripping on Load Flow's
+  NR options.
 - `executedAt`: ISO-8601 UTC timestamp.
 - `inputHash` / `networkHash`: reserved (`null` in MVP, identical to
   Load Flow).
@@ -657,11 +685,28 @@ columns when the corresponding option is enabled:
   MVA in pandapower 2.14; the result is projected to a `skssMva`
   field on the wire to avoid the confusing column name.
 
-The Stage 3 result type uses optional `number | null` for `ipKa` and
-`ithKa` so that the sidecar can return `null` honestly when the
-corresponding option was disabled or pandapower returned NaN. It does
-**not** invent a substitute (e.g., `ip = 2.55 × ikss`) when the
-column is missing.
+The Stage 3 result type uses `number | null` for **every** per-bus
+numeric output (`ikssKa`, `ipKa`, `ithKa`, `skssMva`) so that the
+sidecar and the orchestrator can return `null` honestly whenever a
+value cannot be computed. The cases that produce a `null` numeric
+field are:
+
+1. The option that controls the column was disabled
+   (`computePeak === false` → `ipKa: null`;
+   `computeThermal === false` → `ithKa: null`).
+2. pandapower returned NaN on that row.
+3. The per-row pandapower computation failed (rare, but possible —
+   per-bus rows fall back to `status: "failed"` and all four numeric
+   fields `null`).
+4. The orchestrator synthesized the row for a bus that was **not** in
+   the fault target list (`status: "unavailable"`, all four numeric
+   fields `null`; see §7.3 / §7.5).
+
+The result model **never** invents a substitute (e.g., `ip ≈ 2.55 ×
+ikss`) when a column is missing. Failed and unavailable rows are
+preserved in `busResults` so that the UI can render an explicit empty
+cell next to the bus tag rather than silently dropping it; the
+fail-closed rule from Stage 2 §14.5 is preserved end-to-end.
 
 ### 7.2 Type sketch
 
@@ -703,15 +748,20 @@ export interface ShortCircuitBusResult {
   tag: string;
   /** Stage 1 Bus.vnKv. */
   voltageLevelKv: number;
-  /** Initial symmetrical short-circuit current (kA), IEC 60909 Ik''. */
-  ikssKa: number;
-  /** Peak short-circuit current (kA), IEC 60909 ip. `null` when computePeak=false or pandapower returned NaN. */
+  /** Initial symmetrical short-circuit current (kA), IEC 60909 Ik''. `null` when the row could not be computed (per-bus failure, NaN, or `unavailable` status). */
+  ikssKa: number | null;
+  /** Peak short-circuit current (kA), IEC 60909 ip. `null` when computePeak=false, pandapower returned NaN, or the row is `failed` / `unavailable`. */
   ipKa: number | null;
-  /** Thermal equivalent short-circuit current (kA), IEC 60909 Ith. `null` when computeThermal=false or pandapower returned NaN. */
+  /** Thermal equivalent short-circuit current (kA), IEC 60909 Ith. `null` when computeThermal=false, pandapower returned NaN, or the row is `failed` / `unavailable`. */
   ithKa: number | null;
-  /** Initial symmetrical short-circuit apparent power (MVA), IEC 60909 Sk''. */
-  skssMva: number;
-  /** Per-bus status. `"unavailable"` when the bus was not in the fault target list. */
+  /** Initial symmetrical short-circuit apparent power (MVA), IEC 60909 Sk''. `null` when the row could not be computed (per-bus failure, NaN, or `unavailable` status). */
+  skssMva: number | null;
+  /**
+   * Per-bus status. `"unavailable"` when the bus was not in the fault
+   * target list (orchestrator-synthesized row); `"failed"` when the
+   * bus was targeted but pandapower could not produce a value for it.
+   * In both cases all four numeric fields are `null` (§7.1).
+   */
   status: ShortCircuitBusStatus;
   /** Per-row issue codes that contributed to `status`. */
   issueCodes: ShortCircuitIssueCode[];
@@ -721,13 +771,32 @@ export interface ShortCircuitResult {
   resultId: string;
   runtimeSnapshotId: string;
   scenarioId: string | null;
+  /**
+   * App-side result-API module identifier. This is **not** the same
+   * field as the calculation-store retention key
+   * `CalculationModule = "short_circuit_bundle"` (§8.2). They are
+   * related — both identify the Short Circuit calculation — but live
+   * on different APIs: `module` here annotates the result envelope so
+   * UI consumers can discriminate result kinds, whereas the retention
+   * key is a runtime-store index into `retainedResults`.
+   */
   module: "shortCircuit";
   status: ShortCircuitStatus;
   faultType: ShortCircuitFaultType;
   calculationCase: ShortCircuitCase;
   /** Voltage factor `c` actually used (default 1.0 when missing). */
   voltageFactor: number;
-  /** Per-bus rows keyed by busInternalId. Empty when status === "failed". */
+  /**
+   * Per-bus rows keyed by busInternalId. Includes rows for every
+   * in-scope `SolverBus`, regardless of whether the bus was in the
+   * fault target set: targeted-and-computed rows carry numeric
+   * values, targeted-but-failed rows carry null numerics with
+   * `status: "failed"`, and non-targeted rows carry null numerics
+   * with `status: "unavailable"` (§7.3 / §7.5).
+   * Empty only when the run failed before any normalization could
+   * happen (e.g., sidecar transport failure → top-level
+   * `status === "failed"`).
+   */
   busResults: ShortCircuitBusResult[];
   /** Top-level issues — never fabricated values. */
   issues: ShortCircuitIssue[];
@@ -749,20 +818,23 @@ export interface ShortCircuitRunBundle {
 
 The per-bus `status` field aggregates per-row warnings:
 
-| Condition | `status` |
-|---|---|
-| Bus was faulted, all required inputs present, pandapower converged | `ok` |
-| Bus was faulted; result was produced but a `W-SC-*` was raised on the row (e.g., source data partial used to derive equivalent) | `warning` |
-| Bus was faulted; pandapower failed for that specific bus (rare but possible — projection picks up NaN values) | `failed` |
-| Bus was **not** in the fault target list | `unavailable` (numeric fields all `null`) |
+| Condition | `status` | Numeric fields |
+|---|---|---|
+| Bus was faulted, all required inputs present, pandapower converged | `ok` | populated |
+| Bus was faulted; result was produced but a `W-SC-*` was raised on the row (e.g., source data partial used to derive equivalent) | `warning` | populated |
+| Bus was faulted; pandapower failed for that specific bus (NaN values, per-bus exception) | `failed` | all `null` |
+| Bus was **not** in the fault target list (orchestrator-synthesized row) | `unavailable` | all `null` |
 
 The top-level `status` follows the Stage 2 PR #5 derivation rule:
 
 - `failed` if the run could not produce any per-bus row (e.g.,
-  sidecar failure, pandapower exception, missing slack data).
+  sidecar failure, pandapower exception, missing slack data) — in
+  this case `busResults` may be empty.
 - `warning` if at least one per-bus row was `warning` and none were
   `failed`.
-- `valid` otherwise.
+- `valid` otherwise. `unavailable` rows do **not** by themselves
+  flip the top-level status — they reflect the `mode === "specific"`
+  scoping decision, not a calculation failure.
 
 ### 7.4 What is intentionally NOT in the result
 
@@ -777,6 +849,87 @@ The top-level `status` follows the Stage 2 PR #5 derivation rule:
   `faultLocation` discriminator; the MVP does not pre-bake it.
 - **No per-source contribution breakdown.** Useful for protection
   coordination; deferred (S3-FU-05).
+
+### 7.5 Sidecar response → app-normalized result mapping
+
+The sidecar response (§6.3) and the app-normalized
+`ShortCircuitResult` (§7.2) deliberately use **different**
+vocabularies. The orchestrator
+`runShortCircuitForAppNetwork()` (planned for Stage 3 PR #4) is
+responsible for the projection. The mapping rules:
+
+#### 7.5.1 Field renames
+
+| Sidecar response field | App-normalized field |
+|---|---|
+| `buses[i].internalId` | `busResults[j].busInternalId` |
+| `buses[i].voltageLevelKv` | `busResults[j].voltageLevelKv` |
+| `buses[i].ikssKa` | `busResults[j].ikssKa` |
+| `buses[i].ipKa` | `busResults[j].ipKa` |
+| `buses[i].ithKa` | `busResults[j].ithKa` |
+| `buses[i].skssMva` | `busResults[j].skssMva` |
+| `buses[i].issueCodes` | `busResults[j].issueCodes` |
+| `shortCircuit.calculationCase` | `ShortCircuitResult.calculationCase` |
+| `shortCircuit.faultType` | `ShortCircuitResult.faultType` |
+| `shortCircuit.voltageFactor` | `ShortCircuitResult.voltageFactor` |
+| `metadata` | `ShortCircuitResult.metadata` (with `adapterVersion` overridden by the TypeScript adapter semver, identical to Stage 2 Load Flow) |
+| `issues` | `ShortCircuitResult.issues` |
+
+`tag` on `ShortCircuitBusResult` is filled by the orchestrator from
+`AppNetwork.buses[].tag` (looked up by `internalId`); it is not
+carried on the wire because `SolverInput` already has it.
+
+#### 7.5.2 Per-row status mapping
+
+| Sidecar response `buses[i].status` | App-normalized `busResults[j].status` |
+|---|---|
+| `"valid"` | `"ok"` |
+| `"warning"` | `"warning"` |
+| `"failed"` (per-bus pandapower failure / NaN) | `"failed"` |
+
+The app-side `"unavailable"` status has **no** equivalent in the
+sidecar response — it is synthesized exclusively by the orchestrator
+for buses that were not in the fault target set. Specifically, when
+`request.mode === "specific"`, the orchestrator iterates every
+in-scope `AppNetwork.buses` entry and:
+
+1. If the bus's `internalId` appears in the response's `buses[i]`,
+   project the row through the field-rename and status-mapping
+   tables above.
+2. Otherwise, append a synthesized row with
+   `status: "unavailable"`, all four numeric fields `null`, and an
+   empty `issueCodes` array.
+
+When `request.mode === "all_buses"`, every bus is in the fault
+target set by definition, so the orchestrator should not need to
+synthesize any `unavailable` rows; if a sidecar response is missing a
+bus that was implied by `mode === "all_buses"` (e.g., the sidecar
+skipped it for an internal reason), the orchestrator still
+synthesizes an `unavailable` row plus a top-level `W-SC-*` /
+`E-SC-*` issue noting the discrepancy (the exact code is decided in
+Stage 3 PR #4 alongside the orchestrator implementation).
+
+#### 7.5.3 Top-level status mapping
+
+| Sidecar response top-level `status` | App-normalized `ShortCircuitResult.status` |
+|---|---|
+| `"succeeded"` with no per-row `failed` and no per-row `warning` | `"valid"` |
+| `"succeeded"` with at least one per-row `warning` and no per-row `failed` | `"warning"` |
+| `"succeeded"` with at least one per-row `failed` | `"warning"` (per-row failure does not block other rows; top-level status reflects "the run completed with warnings") |
+| `"failed_validation"` or `"failed_solver"` | `"failed"` |
+
+Transport-level failures (sidecar non-zero exit, malformed JSON, IPC
+timeout, missing metadata) map to a synthesized
+`status: "failed"` result with `busResults: []` and a single
+`E-SC-001` issue, identical in spirit to the Stage 2 Load Flow
+`E-LF-004` handling.
+
+#### 7.5.4 Numeric nullability is preserved end-to-end
+
+A `null` numeric field on the wire passes through unchanged to the
+app-normalized result. The orchestrator does **not** substitute a
+default and does **not** drop the row. This preserves the §S3-OQ-02
+fail-closed rule.
 
 ---
 
@@ -806,15 +959,29 @@ the bundle differs.
 ### 8.2 Calculation-store retention
 
 The Stage 2 `packages/calculation-store` retention shape (§Stage 2
-§9.5 / §10.5) is reused with one widening:
+§9.5 / §10.5) is reused with the following widenings (Stage 3 PR #4
+only — Stage 3 PR #1 / #2 do not touch the package):
 
 - `CalculationModule` literal union becomes
-  `"load_flow_bundle" | "short_circuit_bundle"` (Stage 3 PR #4 only).
+  `"load_flow_bundle" | "short_circuit_bundle"`.
 - `RuntimeResultRetentionKey` carries `module: "short_circuit_bundle"`
-  for short-circuit retention.
+  for short-circuit retention. (This is the **retention key**; it is
+  related to but distinct from the app result-API field
+  `ShortCircuitResult.module = "shortCircuit"` documented in §7.2.)
 - `subCase` stays `null` for MVP; future sub-cases (e.g., per-fault-
   location, per-calculation-case) reuse the existing slot without
   reshaping the key.
+- `RuntimeCalculationRecord.bundle` is currently typed as
+  `LoadFlowRunBundle` in `packages/calculation-store/src/types.ts`.
+  This must be widened to a union (recommended) or a generic so
+  short-circuit retention can hold a `ShortCircuitRunBundle` under the
+  same record shape. The recommended union is
+  `bundle: LoadFlowRunBundle | ShortCircuitRunBundle`, with the
+  retention key's `module` field acting as the discriminator. A
+  fully-generic `RuntimeCalculationRecord<TBundle>` is also viable but
+  pushes a type parameter onto every retention consumer; the MVP
+  prefers the discriminated union for ergonomics. The exact shape is
+  finalized in Stage 3 PR #4 alongside the orchestrator.
 
 Retention rules are unchanged from Stage 2:
 
@@ -1260,3 +1427,4 @@ PR #1.
 | Revision | Date | Description |
 |---|---|---|
 | Rev A | 2026-05-02 | Initial Stage 3 spec. Closes S3-OQ-01 through S3-OQ-10; defines Short Circuit MVP scope (3-phase bolted bus faults, IEC 60909 maximum case), required inputs, AppNetwork / SolverInput reuse policy (no pandapower leakage), sidecar `run_short_circuit` command contract, `ShortCircuitResult` runtime type, runtime-snapshot / calculation-store impact, UI plan, `E-SC-*` / `W-SC-*` codes, AC-S3-01..07, and the six-PR implementation breakdown. Spec-only PR. No code, schema, fixture, or solver-sidecar changes. |
+| Rev A.1 | 2026-05-02 | Spec-text-only patch for PR #11 Codex review. Blocker 1 (numeric nullability): §7.1 prose and §7.2 `ShortCircuitBusResult` updated so every per-bus numeric output (`ikssKa`, `ipKa`, `ithKa`, `skssMva`) is `number \| null`; §7.3 status table now records that `failed` and `unavailable` rows carry all-null numerics; non-computable rows are kept in `busResults` rather than omitted. Blocker 2 (sidecar wire shape vs app-normalized result): §6.3 explicitly names the wire shape as the solver/contract boundary using `internalId` + `status: "valid"\|"warning"\|"failed"`; new §7.5 defines the orchestrator's field-rename mapping (`internalId → busInternalId`), per-row status mapping (`valid → ok`; `failed → "failed"` for targeted-but-failed rows; `"unavailable"` synthesized only by the orchestrator for non-targeted buses), and top-level status mapping. Non-blocking cleanup: §6.3 response example grew an explicit `shortCircuit` block to match §6.4; §7.2 `ShortCircuitResult.module` doc-comment clarifies it is the app result-API module name and is distinct from the calculation-store retention key `"short_circuit_bundle"` (§8.2); §8.2 records that `RuntimeCalculationRecord.bundle` (currently `LoadFlowRunBundle`-specific) must be widened to a discriminated union when `ShortCircuitRunBundle` lands in PR #4. Spec-only; no code, schema, fixture, or solver-sidecar changes. |
