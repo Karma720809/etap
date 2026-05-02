@@ -139,22 +139,22 @@ describeIntegration("Load Flow integration — real Python sidecar", () => {
 
     const bundle = await runLoadFlowForAppNetwork(tinyAppNetwork(), { transport });
 
-    expect(bundle.result.status).toBe("valid");
-    expect(bundle.result.converged).toBe(true);
-    expect(bundle.result.busResults.length).toBeGreaterThan(0);
+    expect(bundle.loadFlow.status).toBe("valid");
+    expect(bundle.loadFlow.converged).toBe(true);
+    expect(bundle.loadFlow.busResults.length).toBeGreaterThan(0);
     // MV bus should be near nominal; LV bus should be slightly
     // depressed because of the transformer + load. Ranges chosen
     // wide enough to tolerate pandapower-version differences.
-    const mv = bundle.result.busResults.find((b) => b.busInternalId === "eq_bus_mv");
-    const lv = bundle.result.busResults.find((b) => b.busInternalId === "eq_bus_lv");
+    const mv = bundle.loadFlow.busResults.find((b) => b.busInternalId === "eq_bus_mv");
+    const lv = bundle.loadFlow.busResults.find((b) => b.busInternalId === "eq_bus_lv");
     expect(mv?.voltagePuPct).toBeGreaterThan(99.5);
     expect(mv?.voltagePuPct).toBeLessThan(100.5);
     expect(lv?.voltagePuPct).toBeGreaterThan(95);
     expect(lv?.voltagePuPct).toBeLessThan(101);
 
-    expect(bundle.result.metadata.solverName).toBe("pandapower");
-    expect(bundle.result.metadata.solverVersion).not.toBe("unavailable");
-    expect(bundle.snapshot.snapshotId).toBe(bundle.result.runtimeSnapshotId);
+    expect(bundle.loadFlow.metadata.solverName).toBe("pandapower");
+    expect(bundle.loadFlow.metadata.solverVersion).not.toBe("unavailable");
+    expect(bundle.snapshot.snapshotId).toBe(bundle.loadFlow.runtimeSnapshotId);
     // Two spawn calls (health + runLoadFlow) each pay the cold import
     // cost. The vitest-level timeout matches the worst-case observed
     // runtime on stock CPython without numba.

@@ -265,14 +265,14 @@ describe("runLoadFlowForAppNetwork — happy path", () => {
     expect(transport.lastInput?.frequencyHz).toBe(60);
     expect(transport.lastInput?.transformers).toHaveLength(1);
 
-    expect(bundle.result.status).toBe("valid");
-    expect(bundle.result.converged).toBe(true);
-    expect(bundle.result.busResults.map((b) => b.busInternalId)).toContain("eq_bus_mv");
-    expect(bundle.result.busResults.map((b) => b.busInternalId)).toContain("eq_bus_lv");
-    expect(bundle.result.branchResults).toHaveLength(1);
-    expect(bundle.result.branchResults[0]?.branchKind).toBe("transformer");
-    expect(bundle.result.metadata.solverName).toBe("pandapower");
-    expect(bundle.result.metadata.solverVersion).toBe("fake-2.14.11");
+    expect(bundle.loadFlow.status).toBe("valid");
+    expect(bundle.loadFlow.converged).toBe(true);
+    expect(bundle.loadFlow.busResults.map((b) => b.busInternalId)).toContain("eq_bus_mv");
+    expect(bundle.loadFlow.busResults.map((b) => b.busInternalId)).toContain("eq_bus_lv");
+    expect(bundle.loadFlow.branchResults).toHaveLength(1);
+    expect(bundle.loadFlow.branchResults[0]?.branchKind).toBe("transformer");
+    expect(bundle.loadFlow.metadata.solverName).toBe("pandapower");
+    expect(bundle.loadFlow.metadata.solverVersion).toBe("fake-2.14.11");
   });
 
   it("creates a runtime snapshot referenced by the result", async () => {
@@ -285,7 +285,7 @@ describe("runLoadFlowForAppNetwork — happy path", () => {
       projectId: "PJT-T",
     });
 
-    expect(bundle.snapshot.snapshotId).toBe(bundle.result.runtimeSnapshotId);
+    expect(bundle.snapshot.snapshotId).toBe(bundle.loadFlow.runtimeSnapshotId);
     expect(bundle.snapshot.scenarioId).toBe("SCN-N");
     expect(bundle.snapshot.projectId).toBe("PJT-T");
     // Stage 2 PR #4 review blocker 2: the snapshot stores the
@@ -368,8 +368,8 @@ describe("runLoadFlowForAppNetwork — pre-flight short-circuit", () => {
     const bundle = await runLoadFlowForAppNetwork(emptyNetwork, { transport });
 
     expect(transport.callCount).toBe(0);
-    expect(bundle.result.status).toBe("failed");
-    expect(bundle.result.issues[0]?.code).toBe("E-LF-005");
+    expect(bundle.loadFlow.status).toBe("failed");
+    expect(bundle.loadFlow.issues[0]?.code).toBe("E-LF-005");
   });
 
   it("does NOT call the transport when the AppNetwork has multiple slack sources", async () => {
@@ -401,8 +401,8 @@ describe("runLoadFlowForAppNetwork — pre-flight short-circuit", () => {
     const bundle = await runLoadFlowForAppNetwork(multiSlack, { transport });
 
     expect(transport.callCount).toBe(0);
-    expect(bundle.result.status).toBe("failed");
-    expect(bundle.result.issues[0]?.code).toBe("E-LF-005");
+    expect(bundle.loadFlow.status).toBe("failed");
+    expect(bundle.loadFlow.issues[0]?.code).toBe("E-LF-005");
     // Snapshot still records the validation summary that authorized
     // (or in this case blocked) the run.
     expect(bundle.snapshot.validation.status).toBe("blocked_by_validation");
@@ -439,8 +439,8 @@ describe("runLoadFlowForAppNetwork — pre-flight short-circuit", () => {
     const bundle = await runLoadFlowForAppNetwork(noSlack, { transport });
 
     expect(transport.callCount).toBe(0);
-    expect(bundle.result.status).toBe("failed");
-    expect(bundle.result.issues[0]?.code).toBe("E-LF-005");
+    expect(bundle.loadFlow.status).toBe("failed");
+    expect(bundle.loadFlow.issues[0]?.code).toBe("E-LF-005");
   });
 });
 
@@ -465,19 +465,19 @@ describe("runLoadFlowForAppNetwork — transport failure", () => {
 
     const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
-    expect(bundle.result.status).toBe("failed");
-    expect(bundle.result.issues[0]?.code).toBe("E-LF-004");
+    expect(bundle.loadFlow.status).toBe("failed");
+    expect(bundle.loadFlow.issues[0]?.code).toBe("E-LF-004");
     // Metadata is always present, never null — both for downstream
     // consumers and for type safety.
-    expect(bundle.result.metadata).toBeDefined();
-    expect(bundle.result.metadata.solverName).toBe("pandapower");
-    expect(bundle.result.metadata.adapterVersion).toBeTypeOf("string");
+    expect(bundle.loadFlow.metadata).toBeDefined();
+    expect(bundle.loadFlow.metadata.solverName).toBe("pandapower");
+    expect(bundle.loadFlow.metadata.adapterVersion).toBeTypeOf("string");
     // No fabricated numbers.
-    expect(bundle.result.busResults).toEqual([]);
-    expect(bundle.result.branchResults).toEqual([]);
-    expect(bundle.result.totalGenerationMw).toBe(0);
-    expect(bundle.result.totalLoadMw).toBe(0);
-    expect(bundle.result.totalLossesMw).toBe(0);
+    expect(bundle.loadFlow.busResults).toEqual([]);
+    expect(bundle.loadFlow.branchResults).toEqual([]);
+    expect(bundle.loadFlow.totalGenerationMw).toBe(0);
+    expect(bundle.loadFlow.totalLoadMw).toBe(0);
+    expect(bundle.loadFlow.totalLossesMw).toBe(0);
   });
 
   it("maps SidecarTransportError to E-LF-004 without inventing voltages", async () => {
@@ -493,11 +493,11 @@ describe("runLoadFlowForAppNetwork — transport failure", () => {
 
     const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
-    expect(bundle.result.status).toBe("failed");
-    expect(bundle.result.converged).toBe(false);
-    expect(bundle.result.issues[0]?.code).toBe("E-LF-004");
-    expect(bundle.result.busResults).toEqual([]);
-    expect(bundle.result.branchResults).toEqual([]);
+    expect(bundle.loadFlow.status).toBe("failed");
+    expect(bundle.loadFlow.converged).toBe(false);
+    expect(bundle.loadFlow.issues[0]?.code).toBe("E-LF-004");
+    expect(bundle.loadFlow.busResults).toEqual([]);
+    expect(bundle.loadFlow.branchResults).toEqual([]);
   });
 
   it("maps a generic Error to E-LF-004 too", async () => {
@@ -509,9 +509,9 @@ describe("runLoadFlowForAppNetwork — transport failure", () => {
 
     const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
-    expect(bundle.result.status).toBe("failed");
-    expect(bundle.result.issues[0]?.code).toBe("E-LF-004");
-    expect(bundle.result.issues[0]?.message).toContain("network unreachable");
+    expect(bundle.loadFlow.status).toBe("failed");
+    expect(bundle.loadFlow.issues[0]?.code).toBe("E-LF-004");
+    expect(bundle.loadFlow.issues[0]?.message).toContain("network unreachable");
   });
 });
 
@@ -520,16 +520,22 @@ describe("runLoadFlowForAppNetwork — transport failure", () => {
 // ---------------------------------------------------------------------------
 
 describe("runLoadFlowForAppNetwork — bundle shape", () => {
-  it("returns voltageDrop: null on the bundle (spec §S2-OQ-05)", async () => {
+  it("returns loadFlow + voltageDrop: null on the bundle (spec §S2-OQ-05)", async () => {
     const project = minimalProject();
     const appNetwork = appNetworkOrThrow(project);
     const transport = new StubTransport(fakeSuccessSolverResult);
 
     const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
-    expect(bundle.voltageDrop).toBeNull();
-    // Property is present (not undefined) so consumers can rely on it.
+    // Stage 2 cleanup: the bundle uses the spec's module names —
+    // `loadFlow` (LoadFlowResult) and `voltageDrop` (null until PR #5).
+    expect("loadFlow" in bundle).toBe(true);
+    expect(bundle.loadFlow).toBeDefined();
     expect("voltageDrop" in bundle).toBe(true);
+    expect(bundle.voltageDrop).toBeNull();
+    // The legacy `result` field has been removed; assert it is gone so
+    // future regressions do not silently reintroduce it.
+    expect("result" in bundle).toBe(false);
   });
 
   it("includes runtime totals, per-row status, and a non-null metadata object on the result", async () => {
@@ -539,15 +545,15 @@ describe("runLoadFlowForAppNetwork — bundle shape", () => {
 
     const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
-    expect(bundle.result.metadata).toBeDefined();
-    expect(bundle.result.metadata.solverName).toBe("pandapower");
-    expect(typeof bundle.result.totalGenerationMw).toBe("number");
-    expect(typeof bundle.result.totalLoadMw).toBe("number");
-    expect(typeof bundle.result.totalLossesMw).toBe("number");
-    for (const bus of bundle.result.busResults) {
+    expect(bundle.loadFlow.metadata).toBeDefined();
+    expect(bundle.loadFlow.metadata.solverName).toBe("pandapower");
+    expect(typeof bundle.loadFlow.totalGenerationMw).toBe("number");
+    expect(typeof bundle.loadFlow.totalLoadMw).toBe("number");
+    expect(typeof bundle.loadFlow.totalLossesMw).toBe("number");
+    for (const bus of bundle.loadFlow.busResults) {
       expect(bus.status).toBeDefined();
     }
-    for (const br of bundle.result.branchResults) {
+    for (const br of bundle.loadFlow.branchResults) {
       expect(br.status).toBeDefined();
     }
   });
@@ -563,6 +569,6 @@ describe("runLoadFlowForAppNetwork — snapshot identity", () => {
     const b = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
     expect(a.snapshot.snapshotId).not.toBe(b.snapshot.snapshotId);
-    expect(a.result.resultId).not.toBe(b.result.resultId);
+    expect(a.loadFlow.resultId).not.toBe(b.loadFlow.resultId);
   });
 });
