@@ -12,9 +12,10 @@
 //   - deriveVoltageDrop(loadFlow, appNetwork, options) — pure
 //     derivation from a normalized Load Flow result.
 //
-// Stage 2 PR #5 deliberately does NOT export short-circuit, cable
-// sizing, or report export — those remain Stage 3 / Stage 4 / Stage 5
-// territory.
+// Stage 3 PR #2 adds Short Circuit contract / sidecar wire types only
+// (`./shortCircuit.js`). Real `run_short_circuit` execution lands in
+// Stage 3 PR #3; the orchestrator and the app-normalized result model
+// land in Stage 3 PR #4.
 
 export * from "./types.js";
 export {
@@ -79,3 +80,25 @@ export {
   type VoltageDropStatus,
   type VoltageDropTotals,
 } from "./voltageDrop.js";
+export {
+  DEFAULT_SHORT_CIRCUIT_OPTIONS,
+  SHORT_CIRCUIT_COMMAND,
+  isShortCircuitSidecarResponse,
+  type ShortCircuitCase,
+  type ShortCircuitCommand,
+  type ShortCircuitErrorCode,
+  type ShortCircuitFaultTarget,
+  type ShortCircuitFaultType,
+  type ShortCircuitIssueCode,
+  type ShortCircuitIssueSeverity,
+  type ShortCircuitMode,
+  type ShortCircuitOptions,
+  type ShortCircuitRequest,
+  type ShortCircuitSidecarBusRow,
+  type ShortCircuitSidecarBusRowStatus,
+  type ShortCircuitSidecarMetadataBlock,
+  type ShortCircuitSidecarResponse,
+  type ShortCircuitSidecarResponseStatus,
+  type ShortCircuitWarningCode,
+  type ShortCircuitWireIssue,
+} from "./shortCircuit.js";
