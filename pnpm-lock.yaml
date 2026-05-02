@@ -174,6 +174,22 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.17)(jsdom@29.1.1)(tsx@4.21.0)
 
+  packages/solver-adapter:
+    dependencies:
+      '@power-system-study/network-model':
+        specifier: workspace:*
+        version: link:../network-model
+    devDependencies:
+      '@power-system-study/schemas':
+        specifier: workspace:*
+        version: link:../schemas
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jsdom@29.1.1)(tsx@4.21.0)
+
   packages/validation:
     dependencies:
       '@power-system-study/core-model':
