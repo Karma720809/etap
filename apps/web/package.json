@@ -17,6 +17,7 @@
     "@power-system-study/project-io": "workspace:*",
     "@power-system-study/schemas": "workspace:*",
     "@power-system-study/solver-adapter": "workspace:*",
+    "@power-system-study/calculation-store": "workspace:*",
     "@power-system-study/validation": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

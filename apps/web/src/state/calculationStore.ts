@@ -1,16 +1,19 @@
-// Stage 2 PR #5 — Runtime Calculation store.
+// Stage 2 PR #5 — Runtime Calculation store wiring (PR #6 refactor).
 //
-// Holds the runtime LoadFlowRunBundle (Load Flow + Voltage Drop) and
-// the run lifecycle status. The store is **runtime-only** by design:
+// PR #5 introduced this React-side store that holds the runtime
+// `LoadFlowRunBundle` outside the canonical project file. PR #6
+// extracts the type / reducer / retention rules into
+// `@power-system-study/calculation-store` so the same logic can be
+// reused outside React. This file now only owns the React glue:
+// provider, transport injection, project-edit stale detection, and
+// the readiness-driven `disabledReason` text.
 //
-//   - Nothing here is serialized into the canonical project file.
-//     The project store (`projectStore.ts`) owns
-//     `PowerSystemProjectFile` only; results live in this separate
-//     store so a result can never accidentally leak into the saved
-//     JSON. Spec §10 / §17 / S2-OQ-06 guardrail.
-//   - Stale tracking is best-effort: when the project changes, the
-//     store marks the latest result `stale=true` and `status="stale"`.
-//     We do not re-run automatically; the user re-runs explicitly.
+// Guardrails preserved (spec §10 / §17 / S2-OQ-06):
+//   - The runtime bundle is held outside `PowerSystemProjectFile`.
+//     The serialized JSON does not grow `calculationResults`, and the
+//     project file's `calculationSnapshots` array stays empty.
+//   - Stale tracking is best-effort: when the project ref changes,
+//     the store dispatches `markStale`. We do not auto-rerun.
 //   - The transport that talks to the Python sidecar is **injected**
 //     at the React root. In tests we inject a stub. In a real desktop
 //     build the StdioSidecarTransport from solver-adapter is the
@@ -38,72 +41,27 @@ import {
   type LoadFlowRunBundle,
   type SidecarTransport,
 } from "@power-system-study/solver-adapter";
+import {
+  calculationReducer,
+  initialCalculationStoreState,
+  type CalculationAction,
+  type CalculationLifecycle,
+  type CalculationStoreState,
+} from "@power-system-study/calculation-store";
 import type { ValidationSummary } from "@power-system-study/schemas";
 
 import { useProjectState } from "./projectStore.js";
 
-export type CalculationLifecycle =
-  | "idle"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "stale";
-
-export interface CalculationStoreState {
-  lifecycle: CalculationLifecycle;
-  bundle: LoadFlowRunBundle | null;
-  /** Last network-build result (used to surface E-NET-* readiness issues). */
-  build: NetworkBuildResult | null;
-  /** ISO timestamp the latest run started or completed. */
-  lastRunAt: string | null;
-  /** Top-level error message when the run could not start (e.g., no transport). */
-  startError: string | null;
-}
-
-export const initialCalculationState: CalculationStoreState = {
-  lifecycle: "idle",
-  bundle: null,
-  build: null,
-  lastRunAt: null,
-  startError: null,
+// Re-export the runtime types from the calculation-store package so
+// existing imports in components / tests keep working without a
+// downstream rename. This file is the React adapter for the
+// underlying runtime store.
+export type {
+  CalculationAction,
+  CalculationLifecycle,
+  CalculationStoreState,
 };
-
-type CalculationAction =
-  | { type: "runStarted"; at: string }
-  | { type: "runFinished"; bundle: LoadFlowRunBundle; build: NetworkBuildResult; at: string }
-  | { type: "runFailed"; message: string; at: string }
-  | { type: "markStale" }
-  | { type: "reset" };
-
-function calculationReducer(
-  state: CalculationStoreState,
-  action: CalculationAction,
-): CalculationStoreState {
-  switch (action.type) {
-    case "runStarted":
-      return { ...state, lifecycle: "running", lastRunAt: action.at, startError: null };
-    case "runFinished":
-      return {
-        lifecycle: action.bundle.loadFlow.status === "failed" ? "failed" : "succeeded",
-        bundle: action.bundle,
-        build: action.build,
-        lastRunAt: action.at,
-        startError: null,
-      };
-    case "runFailed":
-      return {
-        ...state,
-        lifecycle: "failed",
-        startError: action.message,
-        lastRunAt: action.at,
-      };
-    case "markStale":
-      if (state.bundle === null || state.lifecycle === "stale") return state;
-      return { ...state, lifecycle: "stale" };
-    case "reset":
-      return initialCalculationState;
-  }
-}
+export { initialCalculationStoreState as initialCalculationState };
 
 export interface CalculationContextValue {
   state: CalculationStoreState;
@@ -143,21 +101,24 @@ export function CalculationProvider({
   now,
 }: CalculationProviderProps) {
   const { state: projectState } = useProjectState();
-  const [state, dispatch] = useReducer(calculationReducer, initialCalculationState);
+  const [state, dispatch] = useReducer(
+    calculationReducer,
+    initialCalculationStoreState,
+  );
   const lastProjectRef = useRef(projectState.project);
   const nowFn = now ?? (() => new Date().toISOString());
 
-  // Stale tracking: when the project ref changes, mark the result stale.
-  // We do not auto-rerun. Cosmetic-only edits still flip the project ref,
-  // but PR #5 keeps the policy conservative — re-runs are cheap on small
+  // Stale tracking: when the project ref changes, mark the result
+  // stale. Cosmetic-only edits still flip the project ref, but we
+  // keep the policy conservative — re-runs are cheap on small
   // networks and the user has explicit Run control.
   if (lastProjectRef.current !== projectState.project) {
     lastProjectRef.current = projectState.project;
     if (state.bundle !== null && state.lifecycle !== "stale") {
-      // Defer to next render via dispatch; calling dispatch in render is
-      // safe in React when the action is idempotent and the reducer is
-      // pure, but we follow the framework rule and dispatch via effect-
-      // like handler. Use queueMicrotask to avoid the warning.
+      // Defer to next render; calling dispatch in render is safe in
+      // React when the reducer is pure and the action is idempotent,
+      // but we follow the framework rule and dispatch via
+      // queueMicrotask to avoid the warning.
       queueMicrotask(() => dispatch({ type: "markStale" }));
     }
   }
@@ -193,7 +154,7 @@ export function CalculationProvider({
     }
     dispatch({ type: "runStarted", at: nowFn() });
     try {
-      const build = buildAppNetwork(projectState.project);
+      const build: NetworkBuildResult = buildAppNetwork(projectState.project);
       if (build.appNetwork === null) {
         // Network construction failed before the sidecar would have been
         // called. Surface the first network issue as the run-start error
@@ -206,14 +167,37 @@ export function CalculationProvider({
             ? `${first.code}: ${first.message}`
             : "AppNetwork construction failed.",
           at: nowFn(),
+          build,
+          reason: "validation_failure",
         });
         return;
       }
-      const bundle = await runLoadFlowForAppNetwork(build.appNetwork, {
-        transport,
-        projectId: projectState.project.project.projectId,
-      });
-      dispatch({ type: "runFinished", bundle, build, at: nowFn() });
+      const bundle: LoadFlowRunBundle = await runLoadFlowForAppNetwork(
+        build.appNetwork,
+        {
+          transport,
+          projectId: projectState.project.project.projectId,
+        },
+      );
+      const at = nowFn();
+      // Spec §10.2: a failed loadFlow still ships a real bundle with
+      // a real snapshot. Route through `runFailed` so the snapshot
+      // gets retained for audit (PR #6 retention rule §10.5).
+      if (bundle.loadFlow.status === "failed") {
+        const firstError = bundle.loadFlow.issues.find((i) => i.severity === "error");
+        dispatch({
+          type: "runFailed",
+          at,
+          message: firstError
+            ? `${firstError.code}: ${firstError.message}`
+            : "Load Flow failed.",
+          bundle,
+          build,
+          reason: "runtime_failure",
+        });
+      } else {
+        dispatch({ type: "runSucceeded", bundle, build, at });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       dispatch({ type: "runFailed", message, at: nowFn() });
@@ -221,7 +205,7 @@ export function CalculationProvider({
   }, [transport, projectState.project, nowFn]);
 
   const resetCalculation = useCallback(() => {
-    dispatch({ type: "reset" });
+    dispatch({ type: "clearResults" });
   }, []);
 
   const value = useMemo<CalculationContextValue>(
