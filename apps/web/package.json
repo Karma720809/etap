@@ -13,8 +13,10 @@
   "dependencies": {
     "@power-system-study/core-model": "workspace:*",
     "@power-system-study/fixtures": "workspace:*",
+    "@power-system-study/network-model": "workspace:*",
     "@power-system-study/project-io": "workspace:*",
     "@power-system-study/schemas": "workspace:*",
+    "@power-system-study/solver-adapter": "workspace:*",
     "@power-system-study/validation": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -1,8 +1,10 @@
 import { useMemo, useRef, useState } from "react";
 import { getDemoFixture } from "@power-system-study/fixtures";
 import { loadProjectFile, serializeProjectFile } from "@power-system-study/project-io";
+import type { SidecarTransport } from "@power-system-study/solver-adapter";
 import { validateProject } from "@power-system-study/validation";
 import { ProjectProvider, useProjectState } from "./state/projectStore.js";
+import { CalculationProvider } from "./state/calculationStore.js";
 import { EquipmentPalette } from "./components/EquipmentPalette.js";
 import { ProjectTree } from "./components/ProjectTree.js";
 import { PropertyPanel } from "./components/PropertyPanel.js";
@@ -185,9 +187,7 @@ function LeftPanel() {
   );
 }
 
-function BottomPanel() {
-  const { state } = useProjectState();
-  const validation = useMemo(() => validateProject(state.project), [state.project]);
+function BottomPanel({ validation }: { validation: ReturnType<typeof validateProject> }) {
   const [tab, setTab] = useState<BottomTab>("validation");
   return (
     <div style={styles.bottom}>
@@ -224,26 +224,43 @@ function BottomPanel() {
   );
 }
 
-function EditorLayout() {
+function EditorLayout({ transport }: { transport?: SidecarTransport | null }) {
+  // Single CalculationProvider at the editor-layout root so the
+  // diagram canvas overlay and the bottom-panel run controls share
+  // the same runtime calculation state.
+  const { state } = useProjectState();
+  const validation = useMemo(() => validateProject(state.project), [state.project]);
   return (
-    <div style={styles.shell}>
-      <Toolbar />
-      <LeftPanel />
-      <div style={styles.canvas}>
-        <DiagramCanvas />
+    <CalculationProvider validation={validation} transport={transport ?? null}>
+      <div style={styles.shell}>
+        <Toolbar />
+        <LeftPanel />
+        <div style={styles.canvas}>
+          <DiagramCanvas />
+        </div>
+        <div style={styles.rightPanel}>
+          <PropertyPanel />
+        </div>
+        <BottomPanel validation={validation} />
       </div>
-      <div style={styles.rightPanel}>
-        <PropertyPanel />
-      </div>
-      <BottomPanel />
-    </div>
+    </CalculationProvider>
   );
 }
 
-export function App() {
+export interface AppProps {
+  /**
+   * Solver transport injected at the React root. When omitted, the
+   * Run button shows a clear "transport not configured" disabled
+   * state. Tests inject a stub; a future desktop wrapper would inject
+   * `new StdioSidecarTransport()` here.
+   */
+  transport?: SidecarTransport | null;
+}
+
+export function App(props: AppProps = {}) {
   return (
     <ProjectProvider>
-      <EditorLayout />
+      <EditorLayout transport={props.transport} />
     </ProjectProvider>
   );
 }

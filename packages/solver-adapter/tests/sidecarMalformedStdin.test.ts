@@ -17,10 +17,8 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_SIDECAR_SCRIPT_PATH,
-  isSolverResult,
-} from "../src/sidecarClient.js";
+import { isSolverResult } from "../src/sidecarClient.js";
+import { DEFAULT_SIDECAR_SCRIPT_PATH } from "../src/stdioSidecarTransport.js";
 
 const PYTHON = process.env.SOLVER_PYTHON ?? "python3";
 const SHOULD_SKIP = process.env.RUN_SIDECAR_SMOKE === "0" || !pythonAvailable();

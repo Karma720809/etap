@@ -1,11 +1,13 @@
 // Stage 2 PR #4 — Load Flow runner.
+// Stage 2 PR #5 — extended to derive Voltage Drop from the same run.
 //
 // `runLoadFlowForAppNetwork(appNetwork, options)` is the orchestrator
 // that ties together:
 //   1. SolverInput construction (`buildSolverInputFromAppNetwork`),
 //   2. Runtime snapshot creation (`createRuntimeSnapshot`),
 //   3. Sidecar invocation (`SidecarTransport.runLoadFlow`),
-//   4. Result normalization (`normalizeSolverResult`).
+//   4. Result normalization (`normalizeSolverResult`),
+//   5. (PR #5) optional Voltage Drop derivation (`deriveVoltageDrop`).
 //
 // Guardrails enforced here:
 //   - The orchestrator does NOT mutate the input AppNetwork.
@@ -20,15 +22,17 @@
 //     timeout, missing metadata in the response) are mapped to
 //     `E-LF-004 solver adapter failure` — never to fabricated voltages
 //     or currents.
+//   - Voltage Drop is **derived** from the Load Flow result, not run
+//     as a separate solver call (spec §S2-OQ-05 / §7.1). When the
+//     Load Flow is failed, the derivation emits E-VD-001 and the
+//     bundle's `voltageDrop` carries that failed result so callers
+//     can surface the code without re-running.
 //
 // Bundle shape: `LoadFlowRunBundle` exposes the runtime
-// `LoadFlowResult` under the field name `loadFlow` plus a
-// `voltageDrop` field hard-coded to `null` for PR #4 / PR #4.x.
-// Stage 2 spec §S2-OQ-05 requires the result bundle to expose both
-// modules under their canonical names; PR #5 will populate
-// `voltageDrop`. Both fields are included now (rather than added
-// later) so downstream consumers do not need to rename or widen their
-// type when PR #5 lands.
+// `LoadFlowResult` under the field name `loadFlow`, and the runtime
+// `VoltageDropResult` (or `null` when derivation is opted out) under
+// `voltageDrop`. Both fields use the spec's canonical module names
+// (§S2-OQ-05).
 
 import {
   type AppNetwork,
@@ -47,7 +51,6 @@ import {
 } from "./runtimeSnapshot.js";
 import {
   SidecarTransportError,
-  StdioSidecarTransport,
   type SidecarTransport,
 } from "./sidecarClient.js";
 import {
@@ -57,6 +60,10 @@ import {
   type SolverOptions,
   type SolverResult,
 } from "./types.js";
+import {
+  deriveVoltageDrop,
+  type VoltageDropResult,
+} from "./voltageDrop.js";
 
 export interface RunLoadFlowOptions {
   /** Override the per-call solver options (defaults to NR / 1e-8 / 50). */
@@ -73,36 +80,51 @@ export interface RunLoadFlowOptions {
    * to share (e.g., direct adapter tests).
    */
   validation?: RuntimeValidationSummary;
+  /**
+   * Whether to derive Voltage Drop from the Load Flow result.
+   * Defaults to `true` to match the spec §S2-OQ-05 bundled module.
+   * When `false`, `LoadFlowRunBundle.voltageDrop` is `null`.
+   */
+  includeVoltageDrop?: boolean;
+  /** Override the per-cable Voltage Drop limit (default 3.0%, spec §7.2). */
+  voltageDropCableLimitPct?: number;
+  /** Override the per-transformer Voltage Drop limit (default 5.0%, spec §7.2). */
+  voltageDropTransformerLimitPct?: number;
   /** Override `Date.now()` for deterministic test ids. */
   now?: () => Date;
   /** Override the result id generator for deterministic tests. */
   generateResultId?: () => string;
+  /** Override the Voltage Drop result id generator for deterministic tests. */
+  generateVoltageDropResultId?: () => string;
   /** Override the snapshot id generator for deterministic tests. */
   generateSnapshotId?: () => string;
 }
 
 /**
  * Outcome of a Load Flow run: the runtime LoadFlowResult, the runtime
- * snapshot it references, the SolverInput sent to the sidecar, and a
- * placeholder for the Voltage Drop module landing in PR #5.
+ * snapshot it references, the SolverInput sent to the sidecar, and
+ * the Voltage Drop derived from the same Load Flow.
  *
  * This bundle is returned by-value and held by callers in memory.
  * Stage 2 does not persist any of these to disk.
  */
 export interface LoadFlowRunBundle {
   /**
-   * Runtime Load Flow result. Renamed from `result` ahead of PR #5
-   * (Stage 2 cleanup) so the bundle's two modules are symmetric:
-   * `loadFlow` here, `voltageDrop` below.
+   * Runtime Load Flow result. The bundle's two module fields use the
+   * spec's canonical names (`loadFlow` / `voltageDrop`, §S2-OQ-05).
    */
   loadFlow: LoadFlowResult;
   snapshot: RuntimeCalculationSnapshot;
   solverInput: SolverInput;
   /**
-   * Voltage Drop result. Always `null` in PR #4 / PR #4.x. Populated
-   * by Stage 2 PR #5 from the same Load Flow run (spec §S2-OQ-05).
+   * Runtime Voltage Drop result derived from `loadFlow` (spec §7).
+   * `null` only when derivation was opted out via
+   * `RunLoadFlowOptions.includeVoltageDrop = false`. When the Load
+   * Flow itself is failed, the bundle still carries a real
+   * `VoltageDropResult` whose `status === "failed"` and whose
+   * `issues` carries `E-VD-001` so the UI can surface the cause.
    */
-  voltageDrop: null;
+  voltageDrop: VoltageDropResult | null;
 }
 
 let __resultCounter = 0;
@@ -111,6 +133,14 @@ function defaultGenerateResultId(now: Date): string {
   const stamp = now.getTime().toString(36);
   const tail = __resultCounter.toString(36).padStart(2, "0");
   return `lfr_${stamp}_${tail}`;
+}
+
+let __voltageDropCounter = 0;
+function defaultGenerateVoltageDropResultId(now: Date): string {
+  __voltageDropCounter += 1;
+  const stamp = now.getTime().toString(36);
+  const tail = __voltageDropCounter.toString(36).padStart(2, "0");
+  return `vdr_${stamp}_${tail}`;
 }
 
 /**
@@ -148,6 +178,10 @@ export async function runLoadFlowForAppNetwork(
 
   const resultId = (options.generateResultId ?? (() => defaultGenerateResultId(createdAtDate)))();
 
+  const includeVoltageDrop = options.includeVoltageDrop ?? true;
+  const generateVoltageDropResultId =
+    options.generateVoltageDropResultId ?? (() => defaultGenerateVoltageDropResultId(createdAtDate));
+
   if (preflightIssue !== null) {
     return makeFailureBundle({
       appNetwork,
@@ -158,10 +192,14 @@ export async function runLoadFlowForAppNetwork(
       issue: preflightIssue,
       // No sidecar spawn → no real solver metadata.
       solverOptions,
+      includeVoltageDrop,
+      generateVoltageDropResultId,
+      voltageDropCableLimitPct: options.voltageDropCableLimitPct,
+      voltageDropTransformerLimitPct: options.voltageDropTransformerLimitPct,
     });
   }
 
-  const transport = options.transport ?? new StdioSidecarTransport();
+  const transport = options.transport ?? (await defaultTransport());
 
   let solverResult: SolverResult;
   try {
@@ -185,6 +223,10 @@ export async function runLoadFlowForAppNetwork(
         message: `solver sidecar transport failure: ${message}`,
       },
       solverOptions,
+      includeVoltageDrop,
+      generateVoltageDropResultId,
+      voltageDropCableLimitPct: options.voltageDropCableLimitPct,
+      voltageDropTransformerLimitPct: options.voltageDropTransformerLimitPct,
     });
   }
 
@@ -202,7 +244,20 @@ export async function runLoadFlowForAppNetwork(
     createdAt,
   });
 
-  return { loadFlow: result, snapshot, solverInput, voltageDrop: null };
+  const voltageDrop = includeVoltageDrop
+    ? deriveVoltageDrop(result, appNetwork, {
+        resultId: generateVoltageDropResultId(),
+        createdAt,
+        ...(options.voltageDropCableLimitPct !== undefined
+          ? { cableLimitPct: options.voltageDropCableLimitPct }
+          : {}),
+        ...(options.voltageDropTransformerLimitPct !== undefined
+          ? { transformerLimitPct: options.voltageDropTransformerLimitPct }
+          : {}),
+      })
+    : null;
+
+  return { loadFlow: result, snapshot, solverInput, voltageDrop };
 }
 
 interface FailureBundleArgs {
@@ -213,6 +268,10 @@ interface FailureBundleArgs {
   createdAt: string;
   issue: LoadFlowIssue;
   solverOptions: SolverOptions;
+  includeVoltageDrop: boolean;
+  generateVoltageDropResultId: () => string;
+  voltageDropCableLimitPct?: number;
+  voltageDropTransformerLimitPct?: number;
 }
 
 function makeFailureBundle(args: FailureBundleArgs): LoadFlowRunBundle {
@@ -251,12 +310,44 @@ function makeFailureBundle(args: FailureBundleArgs): LoadFlowRunBundle {
     createdAt: args.createdAt,
   });
 
+  const voltageDrop = args.includeVoltageDrop
+    ? deriveVoltageDrop(result, args.appNetwork, {
+        resultId: args.generateVoltageDropResultId(),
+        createdAt: args.createdAt,
+        ...(args.voltageDropCableLimitPct !== undefined
+          ? { cableLimitPct: args.voltageDropCableLimitPct }
+          : {}),
+        ...(args.voltageDropTransformerLimitPct !== undefined
+          ? { transformerLimitPct: args.voltageDropTransformerLimitPct }
+          : {}),
+      })
+    : null;
+
   return {
     loadFlow: result,
     snapshot: args.snapshot,
     solverInput: args.solverInput,
-    voltageDrop: null,
+    voltageDrop,
   };
+}
+
+/**
+ * Lazy default-transport factory. The real transport
+ * (`StdioSidecarTransport`) imports `node:child_process`, which the
+ * browser bundler (Vite) cannot resolve. By dynamic-importing the
+ * client only when no transport is injected, the orchestrator stays
+ * importable from browser code paths that hand-roll a transport
+ * (PR #5 UI run path) and from Node tests that pass a stub.
+ */
+async function defaultTransport(): Promise<SidecarTransport> {
+  // Vite/Rollup statically analyzes string-literal `import()` calls
+  // and tries to bundle the target. The real Node implementation
+  // imports `node:child_process` etc., which the browser bundler
+  // cannot resolve, so we hide the path behind a runtime expression.
+  // The marker keeps Vite from chunk-splitting this import too.
+  const path = "./stdioSidecarTransport.js";
+  const mod = (await import(/* @vite-ignore */ path)) as typeof import("./stdioSidecarTransport.js");
+  return new mod.StdioSidecarTransport();
 }
 
 /**

@@ -29,12 +29,18 @@ importers:
       '@power-system-study/fixtures':
         specifier: workspace:*
         version: link:../../packages/fixtures
+      '@power-system-study/network-model':
+        specifier: workspace:*
+        version: link:../../packages/network-model
       '@power-system-study/project-io':
         specifier: workspace:*
         version: link:../../packages/project-io
       '@power-system-study/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@power-system-study/solver-adapter':
+        specifier: workspace:*
+        version: link:../../packages/solver-adapter
       '@power-system-study/validation':
         specifier: workspace:*
         version: link:../../packages/validation

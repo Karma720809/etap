@@ -520,22 +520,56 @@ describe("runLoadFlowForAppNetwork — transport failure", () => {
 // ---------------------------------------------------------------------------
 
 describe("runLoadFlowForAppNetwork — bundle shape", () => {
-  it("returns loadFlow + voltageDrop: null on the bundle (spec §S2-OQ-05)", async () => {
+  it("returns loadFlow + a real voltageDrop result by default (spec §S2-OQ-05 / PR #5)", async () => {
     const project = minimalProject();
     const appNetwork = appNetworkOrThrow(project);
     const transport = new StubTransport(fakeSuccessSolverResult);
 
     const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
 
-    // Stage 2 cleanup: the bundle uses the spec's module names —
-    // `loadFlow` (LoadFlowResult) and `voltageDrop` (null until PR #5).
+    // Stage 2 PR #5: bundle uses the spec's module names — `loadFlow`
+    // and `voltageDrop` — and `voltageDrop` is now a real result.
     expect("loadFlow" in bundle).toBe(true);
     expect(bundle.loadFlow).toBeDefined();
     expect("voltageDrop" in bundle).toBe(true);
-    expect(bundle.voltageDrop).toBeNull();
+    expect(bundle.voltageDrop).not.toBeNull();
+    expect(bundle.voltageDrop?.sourceLoadFlowResultId).toBe(bundle.loadFlow.resultId);
+    expect(bundle.voltageDrop?.runtimeSnapshotId).toBe(bundle.snapshot.snapshotId);
+    expect(bundle.voltageDrop?.branchResults.length).toBe(bundle.loadFlow.branchResults.length);
     // The legacy `result` field has been removed; assert it is gone so
     // future regressions do not silently reintroduce it.
     expect("result" in bundle).toBe(false);
+  });
+
+  it("leaves voltageDrop=null when includeVoltageDrop=false", async () => {
+    const project = minimalProject();
+    const appNetwork = appNetworkOrThrow(project);
+    const transport = new StubTransport(fakeSuccessSolverResult);
+
+    const bundle = await runLoadFlowForAppNetwork(appNetwork, {
+      transport,
+      includeVoltageDrop: false,
+    });
+
+    expect(bundle.voltageDrop).toBeNull();
+  });
+
+  it("populates voltageDrop with a failed VD result (E-VD-001) when load flow fails", async () => {
+    const project = minimalProject();
+    const appNetwork = appNetworkOrThrow(project);
+    const transport = new StubTransport(() => {
+      throw new Error("solver crashed");
+    });
+
+    const bundle = await runLoadFlowForAppNetwork(appNetwork, { transport });
+
+    expect(bundle.loadFlow.status).toBe("failed");
+    // Spec §7.4 / user task: the bundle still surfaces a structured
+    // VoltageDropResult so the UI can show E-VD-001 directly.
+    expect(bundle.voltageDrop).not.toBeNull();
+    expect(bundle.voltageDrop?.status).toBe("failed");
+    expect(bundle.voltageDrop?.issues[0]?.code).toBe("E-VD-001");
+    expect(bundle.voltageDrop?.branchResults).toEqual([]);
   });
 
   it("includes runtime totals, per-row status, and a non-null metadata object on the result", async () => {

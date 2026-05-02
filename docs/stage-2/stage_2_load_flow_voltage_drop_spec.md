@@ -650,7 +650,18 @@ defaults (§7.2) and is independent of bus band status.
 
 - Voltage Drop **cannot** run if Load Flow result is invalid or
   unavailable. This case raises `E-VD-001` (`voltage drop unavailable
-  because load flow invalid`). The bundle returns `voltageDrop = null`.
+  because load flow invalid`).
+- Stage 2 PR #5 implementation note: when the Load Flow is `failed`
+  and Voltage Drop derivation is requested
+  (`RunLoadFlowOptions.includeVoltageDrop = true`, the default), the
+  bundle's `voltageDrop` field is a real `VoltageDropResult` whose
+  `status` is `failed` and whose `issues` carries `E-VD-001` —
+  giving the UI a single place to surface the cause. The field is
+  only `null` when derivation is explicitly opted out via
+  `includeVoltageDrop = false`. (Earlier spec drafts said "the
+  bundle returns voltageDrop = null" when Load Flow is failed; the
+  PR #5 implementation keeps the bundle field populated with a
+  failed result so users see the structured E-VD-001 directly.)
 - Voltage Drop also cannot be run "alone" — the API runs the Load Flow
   step first, then derives the Voltage Drop result. Re-runs invalidate
   both.
@@ -1299,10 +1310,48 @@ match the guardrail "do not implement Stage 2 in this PR" from the spec
 
 ### Stage 2 PR #5 — Voltage Drop result + UI tables / overlay
 
-- Voltage Drop derivation per §7 inside `packages/calculation`.
-- UI: `LoadFlowResultTable`, `VoltageDropResultTable`, diagram overlay,
-  Run button activation, replacing the Stage 1 placeholder calculation
-  panel for Load Flow / Voltage Drop only.
+- Voltage Drop derivation per §7 lives in
+  `packages/solver-adapter/src/voltageDrop.ts` (the calculation-store
+  package split is still deferred to PR #6 — see §16/§5.4 of the
+  solver adapter contract). Pure `deriveVoltageDrop()` consumes a
+  normalized `LoadFlowResult` and an `AppNetwork`; no second solver
+  call (spec §S2-OQ-05).
+- `LoadFlowRunBundle.voltageDrop` now carries either a real
+  `VoltageDropResult` or `null` when derivation is opted out via
+  `RunLoadFlowOptions.includeVoltageDrop = false`. When the Load
+  Flow itself is `failed`, the bundle's `voltageDrop` is a
+  structured failed result with `E-VD-001` in `issues` so the UI
+  can show the cause without re-running.
+- Default Voltage Drop limits (spec §7.2): cable 3.0%,
+  transformer 5.0%. Both overridable per call. Project-level limit
+  settings remain S2-FU-02 (post-PR-5).
+- Voltage Drop status mapping per §7.3.1 (`ok` /
+  `warning` (`W-VD-002`) / `violation` (`W-VD-001`)), plus a
+  fourth row-level status `unavailable` raised when an endpoint
+  voltage is missing from the Load Flow (`E-VD-002`). The
+  `unavailable` row carries `null` numeric fields — Stage 2 PR #5
+  does not invent values.
+- UI: `ResultTables` (Load Flow buses / branches / Voltage Drop)
+  and a diagram overlay that adds bus voltage % and per-branch
+  current / loading / VD % when a real result exists. The Stage 1
+  placeholder calculation panel is replaced with a real Run button
+  for Load Flow / Voltage Drop.
+- Runtime calculation store in `apps/web` (`calculationStore.ts`).
+  The runtime bundle is kept outside `PowerSystemProjectFile`; the
+  serialized JSON does **not** grow a `calculationResults` field
+  and the project file's `calculationSnapshots` array stays empty
+  per spec §10. Stale tracking flips the lifecycle to `stale` when
+  the project changes after a successful run; Stage 2 PR #5 does
+  not auto-recompute and does not persist the bundle.
+- Solver-adapter package surface split: `sidecarClient.ts` keeps
+  only browser-safe contract types and structural guards;
+  `stdioSidecarTransport.ts` owns the Node-only stdio
+  implementation. The package index does **not** re-export
+  `StdioSidecarTransport`; Node callers (CLI, integration tests,
+  future desktop wrapper) import the subpath directly. The
+  orchestrator dynamic-imports the Node module only when no
+  transport is injected, so browser bundles import the orchestrator
+  cleanly.
 - Adapter contract tests `S2-ADP-06..07`.
 - GC-LF-02, GC-VD-01 added; GC-INVALID-LF-01..03 wired into the
   validation suite.

@@ -19,10 +19,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
-  StdioSidecarTransport,
   SidecarTransportError,
   isSolverResult,
 } from "../src/sidecarClient.js";
+import { StdioSidecarTransport } from "../src/stdioSidecarTransport.js";
 import {
   DEFAULT_SOLVER_OPTIONS,
   SOLVER_INPUT_VERSION,

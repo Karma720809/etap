@@ -1,9 +1,83 @@
 import { useMemo } from "react";
 import ReactFlow, { Background, Controls, type Edge, type Node, type NodeMouseHandler } from "reactflow";
 import type { PowerSystemProjectFile } from "@power-system-study/schemas";
+import type {
+  LoadFlowBranchResult,
+  LoadFlowBusResult,
+  VoltageDropBranchResult,
+} from "@power-system-study/solver-adapter";
 import { useProjectState } from "../state/projectStore.js";
+import { useCalculation } from "../state/calculationStore.js";
 
-function buildReactFlowGraph(project: PowerSystemProjectFile, selectedInternalId: string | null): { nodes: Node[]; edges: Edge[] } {
+// Stage 2 PR #5 — diagram overlay.
+//
+// When a runtime LoadFlowRunBundle exists, the canvas appends real
+// numeric labels to bus and branch elements:
+//   - Bus nodes: "<tag> · <V%> %"
+//   - Branch edges (cables): the original tag list plus "<I A> · <VD%>"
+//     where each value is omitted with an em-dash if not present.
+// We never render an overlay before a real result exists. The
+// underlying ReactFlow node/edge identities are unchanged so the user
+// can still pan, zoom, and select equipment.
+
+interface OverlayMaps {
+  busById: Map<string, LoadFlowBusResult>;
+  branchById: Map<string, LoadFlowBranchResult>;
+  vdById: Map<string, VoltageDropBranchResult>;
+}
+
+function buildOverlayMaps(
+  loadFlow: { busResults: LoadFlowBusResult[]; branchResults: LoadFlowBranchResult[] } | null,
+  voltageDrop: { branchResults: VoltageDropBranchResult[] } | null,
+): OverlayMaps {
+  const busById = new Map<string, LoadFlowBusResult>();
+  const branchById = new Map<string, LoadFlowBranchResult>();
+  const vdById = new Map<string, VoltageDropBranchResult>();
+  if (loadFlow) {
+    for (const b of loadFlow.busResults) busById.set(b.busInternalId, b);
+    for (const br of loadFlow.branchResults) branchById.set(br.branchInternalId, br);
+  }
+  if (voltageDrop) {
+    for (const v of voltageDrop.branchResults) vdById.set(v.branchInternalId, v);
+  }
+  return { busById, branchById, vdById };
+}
+
+function busOverlay(node: { equipmentInternalId: string; kind: string }, overlays: OverlayMaps): string | null {
+  if (node.kind !== "bus") return null;
+  const bus = overlays.busById.get(node.equipmentInternalId);
+  if (!bus || !Number.isFinite(bus.voltagePuPct)) return null;
+  return `${bus.voltagePuPct.toFixed(1)}% pu`;
+}
+
+function branchOverlay(equipmentIds: string[], overlays: OverlayMaps): string | null {
+  if (equipmentIds.length === 0) return null;
+  const parts: string[] = [];
+  for (const id of equipmentIds) {
+    const branch = overlays.branchById.get(id);
+    if (!branch) continue;
+    const i = Number.isFinite(branch.currentA) ? `${branch.currentA.toFixed(1)} A` : null;
+    const loading = branch.loadingPct !== null && Number.isFinite(branch.loadingPct)
+      ? `${branch.loadingPct.toFixed(1)}% load`
+      : null;
+    const vd = overlays.vdById.get(id);
+    const drop =
+      vd && vd.voltageDropPct !== null && Number.isFinite(vd.voltageDropPct)
+        ? `${vd.voltageDropPct.toFixed(2)}% VD`
+        : null;
+    const segments = [i, loading, drop].filter((x): x is string => x !== null);
+    if (segments.length > 0) {
+      parts.push(`${id}: ${segments.join(" · ")}`);
+    }
+  }
+  return parts.length === 0 ? null : parts.join("\n");
+}
+
+function buildReactFlowGraph(
+  project: PowerSystemProjectFile,
+  selectedInternalId: string | null,
+  overlays: OverlayMaps,
+): { nodes: Node[]; edges: Edge[] } {
   const tagByEquipmentId = new Map<string, string>();
   const all = [
     ...project.equipment.utilities,
@@ -21,13 +95,18 @@ function buildReactFlowGraph(project: PowerSystemProjectFile, selectedInternalId
 
   const nodes: Node[] = project.diagram.nodes.map((n) => {
     const isSelected = n.equipmentInternalId === selectedInternalId;
+    const overlayLabel = busOverlay(n, overlays);
+    const tag = tagByEquipmentId.get(n.equipmentInternalId) ?? n.equipmentInternalId;
+    const label = overlayLabel
+      ? `${tag}\n[${n.kind}]\n${overlayLabel}`
+      : `${tag}\n[${n.kind}]`;
     return {
       id: n.id,
       position: { x: n.position.x, y: n.position.y },
-      data: { label: `${tagByEquipmentId.get(n.equipmentInternalId) ?? n.equipmentInternalId}\n[${n.kind}]`, equipmentInternalId: n.equipmentInternalId },
+      data: { label, equipmentInternalId: n.equipmentInternalId },
       style: {
         width: n.width ?? 160,
-        height: n.height ?? 48,
+        height: (n.height ?? 48) + (overlayLabel ? 16 : 0),
         whiteSpace: "pre-line",
         fontSize: 11,
         borderRadius: n.kind === "bus" ? 0 : 6,
@@ -38,12 +117,15 @@ function buildReactFlowGraph(project: PowerSystemProjectFile, selectedInternalId
   });
 
   const edges: Edge[] = project.diagram.edges.map((e) => {
-    const branchTags = (e.branchEquipmentInternalIds ?? [])
+    const equipmentIds = e.branchEquipmentInternalIds ?? [];
+    const branchTags = equipmentIds
       .map((id) => tagByEquipmentId.get(id) ?? id)
       .join(" → ");
-    const label = e.kind === "branch_chain"
+    const overlay = branchOverlay(equipmentIds, overlays);
+    const baseLabel = e.kind === "branch_chain"
       ? branchTags || (e.label ?? "branch_chain")
       : e.label ?? "";
+    const label = overlay ? `${baseLabel}\n${overlay}` : baseLabel;
     return {
       id: e.id,
       source: e.fromNodeId,
@@ -52,7 +134,7 @@ function buildReactFlowGraph(project: PowerSystemProjectFile, selectedInternalId
       type: "default",
       animated: e.kind === "branch_chain",
       style: e.kind === "branch_chain" ? { stroke: "#9333ea", strokeWidth: 2 } : { stroke: "#475569" },
-      labelStyle: { fontSize: 10 },
+      labelStyle: { fontSize: 10, whiteSpace: "pre-line" } as React.CSSProperties,
     };
   });
 
@@ -61,9 +143,18 @@ function buildReactFlowGraph(project: PowerSystemProjectFile, selectedInternalId
 
 export function DiagramCanvas() {
   const { state, dispatch } = useProjectState();
+  const { state: calcState } = useCalculation();
+  const overlays = useMemo(
+    () =>
+      buildOverlayMaps(
+        calcState.bundle?.loadFlow ?? null,
+        calcState.bundle?.voltageDrop ?? null,
+      ),
+    [calcState.bundle],
+  );
   const { nodes, edges } = useMemo(
-    () => buildReactFlowGraph(state.project, state.selectedInternalId),
-    [state.project, state.selectedInternalId],
+    () => buildReactFlowGraph(state.project, state.selectedInternalId, overlays),
+    [state.project, state.selectedInternalId, overlays],
   );
 
   const onNodeClick: NodeMouseHandler = (_event, node) => {
