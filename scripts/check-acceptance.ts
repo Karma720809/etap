@@ -12,45 +12,67 @@ interface Criterion {
   owner: string;
 }
 
-interface CoverageManifest {
+interface StageBlock {
   criteria: Criterion[];
+}
+
+interface CoverageManifest {
+  stage1: StageBlock;
+  stage2: StageBlock;
 }
 
 const manifestPath = resolve(repoRoot, "scripts/acceptance-coverage.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CoverageManifest;
 
-const expected = Array.from({ length: 23 }, (_, i) => `AC${String(i + 1).padStart(2, "0")}`);
-const seen = new Set(manifest.criteria.map((c) => c.id));
-
-const missing = expected.filter((id) => !seen.has(id));
-const unowned = manifest.criteria.filter((c) => !c.owner || c.owner.trim() === "");
+const stage1Expected = Array.from({ length: 23 }, (_, i) => `AC${String(i + 1).padStart(2, "0")}`);
+const stage2Expected = Array.from({ length: 17 }, (_, i) => `AC-S2-${String(i + 1).padStart(2, "0")}`);
 
 let ok = true;
 
-console.log("Stage 1 acceptance coverage:");
-for (const id of expected) {
-  const crit = manifest.criteria.find((c) => c.id === id);
-  if (!crit) {
-    console.log(`  ${id}: MISSING from manifest`);
+function reportStage(label: string, expected: string[], block: StageBlock | undefined): void {
+  console.log(`${label} acceptance coverage:`);
+  if (!block || !Array.isArray(block.criteria)) {
+    console.log(`  (no '${label.toLowerCase().replace(" ", "")}' block in manifest)`);
     ok = false;
-    continue;
+    return;
   }
-  const isDeferred = crit.owner.includes("deferred-PR-");
-  const tag = isDeferred ? "deferred" : "mapped";
-  console.log(`  ${id} [${tag}]: ${crit.summary} → ${crit.owner}`);
+  const seen = new Set(block.criteria.map((c) => c.id));
+  for (const id of expected) {
+    const crit = block.criteria.find((c) => c.id === id);
+    if (!crit) {
+      console.log(`  ${id}: MISSING from manifest`);
+      ok = false;
+      continue;
+    }
+    const isDeferred = crit.owner.includes("deferred-PR-") || crit.owner.includes("deferred-post-stage-");
+    const tag = isDeferred ? "deferred" : "mapped";
+    console.log(`  ${id} [${tag}]: ${crit.summary} → ${crit.owner}`);
+  }
+  const missing = expected.filter((id) => !seen.has(id));
+  const unowned = block.criteria.filter((c) => !c.owner || c.owner.trim() === "");
+  const unexpected = block.criteria.filter((c) => !expected.includes(c.id));
+  if (missing.length > 0) {
+    console.log(`  ${missing.length} criteria missing from manifest: ${missing.join(", ")}`);
+    ok = false;
+  }
+  if (unowned.length > 0) {
+    console.log(`  ${unowned.length} criteria have no owner: ${unowned.map((c) => c.id).join(", ")}`);
+    ok = false;
+  }
+  if (unexpected.length > 0) {
+    console.log(`  ${unexpected.length} unexpected criteria in manifest: ${unexpected.map((c) => c.id).join(", ")}`);
+    ok = false;
+  }
 }
 
-if (missing.length > 0) {
-  console.log(`\n${missing.length} criteria missing from manifest: ${missing.join(", ")}`);
-  ok = false;
-}
-if (unowned.length > 0) {
-  console.log(`\n${unowned.length} criteria have no owner: ${unowned.map((c) => c.id).join(", ")}`);
-  ok = false;
-}
+reportStage("Stage 1", stage1Expected, manifest.stage1);
+console.log("");
+reportStage("Stage 2", stage2Expected, manifest.stage2);
 
 if (ok) {
-  console.log(`\nAll ${expected.length} Stage 1 acceptance criteria have a verification owner (mapped or deferred).`);
+  console.log(
+    `\nAll ${stage1Expected.length} Stage 1 + ${stage2Expected.length} Stage 2 acceptance criteria have a verification owner (mapped or deferred).`,
+  );
   process.exit(0);
 }
 console.error("\nAcceptance coverage check FAILED.");
