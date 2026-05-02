@@ -243,6 +243,14 @@ class StubTransport implements SidecarTransport {
     this.lastInput = input;
     return await this.responder(input);
   }
+
+  async runShortCircuit(): Promise<never> {
+    // Stage 3 PR #3 — Load Flow tests do not exercise Short Circuit.
+    // The stub satisfies the SidecarTransport interface but throws if
+    // accidentally called so a future test refactor cannot silently
+    // route a Short Circuit call through this stub.
+    throw new Error("StubTransport.runShortCircuit not implemented for Load Flow tests");
+  }
 }
 
 // ---------------------------------------------------------------------------

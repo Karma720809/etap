@@ -1,17 +1,24 @@
 // Stage 2 PR #5 — Node-only stdio sidecar transport.
+// Stage 3 PR #3 — `runShortCircuit` implementation added.
 //
 // The real Node implementation of `SidecarTransport` was extracted
 // out of `sidecarClient.ts` so the contract types remain importable
 // from browser bundles (Vite). Anything in this file is Node-only:
 // it imports `node:child_process`, `node:path`, and `node:url`. The
-// orchestrator (`loadFlow.ts`) lazy-imports this file on the first
-// call when no transport is injected, which keeps it out of the
-// browser dependency graph.
+// orchestrator (`loadFlow.ts` / future `shortCircuitRunner.ts`)
+// lazy-imports this file on the first call when no transport is
+// injected, which keeps it out of the browser dependency graph.
 
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  SHORT_CIRCUIT_COMMAND,
+  isShortCircuitSidecarResponse,
+  type ShortCircuitRequest,
+  type ShortCircuitSidecarResponse,
+} from "./shortCircuit.js";
 import {
   SidecarTransportError,
   isSidecarHealth,
@@ -185,6 +192,42 @@ export class StdioSidecarTransport implements SidecarTransport {
     if (!isSolverResult(parsed)) {
       throw new SidecarTransportError(
         "solver sidecar response did not match SolverResult shape",
+        result,
+      );
+    }
+    return parsed;
+  }
+
+  /**
+   * Stage 3 PR #3 — wire-only Short Circuit transport call. Mirrors
+   * `runLoadFlow`: spawn the sidecar with the `run_short_circuit`
+   * command, write a single-line JSON request to stdin, parse the
+   * single-line JSON response from stdout, and reject any payload
+   * that fails the strict `isShortCircuitSidecarResponse` guard so
+   * the future orchestrator (PR #4) can map the rejection into
+   * `E-SC-001` rather than letting a malformed wire shape reach
+   * normalization.
+   */
+  async runShortCircuit(
+    request: ShortCircuitRequest,
+  ): Promise<ShortCircuitSidecarResponse> {
+    const requestLine = JSON.stringify(request) + "\n";
+    const result = await spawnSidecar(
+      this.pythonExecutable,
+      [this.sidecarScriptPath, SHORT_CIRCUIT_COMMAND],
+      requestLine,
+      this.timeoutMs,
+    );
+    if (result.exitCode !== 0) {
+      throw new SidecarTransportError(
+        `solver sidecar ${SHORT_CIRCUIT_COMMAND} exited ${result.exitCode}`,
+        result,
+      );
+    }
+    const parsed = parseFirstJsonLine(result.stdout);
+    if (!isShortCircuitSidecarResponse(parsed)) {
+      throw new SidecarTransportError(
+        "solver sidecar response did not match ShortCircuitSidecarResponse shape",
         result,
       );
     }

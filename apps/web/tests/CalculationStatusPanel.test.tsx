@@ -84,6 +84,10 @@ class StubTransport implements SidecarTransport {
   async runLoadFlow(input: SolverInput): Promise<SolverResult> {
     return fakeSuccessSolverResult(input);
   }
+  async runShortCircuit(): Promise<never> {
+    // Stage 3 PR #3 — UI panel tests do not exercise Short Circuit.
+    throw new Error("StubTransport.runShortCircuit not implemented for panel tests");
+  }
 }
 
 function renderPanel(opts: { validation: ValidationSummary; transport?: SidecarTransport | null }) {

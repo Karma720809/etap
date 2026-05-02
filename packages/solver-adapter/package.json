@@ -11,7 +11,7 @@
   "scripts": {
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "test:integration": "RUN_SIDECAR_INTEGRATION=1 vitest run tests/loadFlow.integration.test.ts",
+    "test:integration": "RUN_SIDECAR_INTEGRATION=1 vitest run tests/loadFlow.integration.test.ts tests/shortCircuit.integration.test.ts",
     "build": "tsc -b"
   },
   "dependencies": {
