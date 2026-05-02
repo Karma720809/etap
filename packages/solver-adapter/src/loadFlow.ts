@@ -22,11 +22,13 @@
 //     or currents.
 //
 // Bundle shape: `LoadFlowRunBundle` exposes the runtime
-// `LoadFlowResult` plus a `voltageDrop` field hard-coded to `null` for
-// PR #4. Stage 2 spec §S2-OQ-05 requires the result bundle to expose
-// both modules; PR #5 will populate `voltageDrop`. The field is
-// included now (rather than added later) so downstream consumers do
-// not need to widen their type when PR #5 lands.
+// `LoadFlowResult` under the field name `loadFlow` plus a
+// `voltageDrop` field hard-coded to `null` for PR #4 / PR #4.x.
+// Stage 2 spec §S2-OQ-05 requires the result bundle to expose both
+// modules under their canonical names; PR #5 will populate
+// `voltageDrop`. Both fields are included now (rather than added
+// later) so downstream consumers do not need to rename or widen their
+// type when PR #5 lands.
 
 import {
   type AppNetwork,
@@ -88,12 +90,17 @@ export interface RunLoadFlowOptions {
  * Stage 2 does not persist any of these to disk.
  */
 export interface LoadFlowRunBundle {
-  result: LoadFlowResult;
+  /**
+   * Runtime Load Flow result. Renamed from `result` ahead of PR #5
+   * (Stage 2 cleanup) so the bundle's two modules are symmetric:
+   * `loadFlow` here, `voltageDrop` below.
+   */
+  loadFlow: LoadFlowResult;
   snapshot: RuntimeCalculationSnapshot;
   solverInput: SolverInput;
   /**
-   * Voltage Drop result. Always `null` in PR #4. Populated by Stage 2
-   * PR #5 from the same Load Flow run (spec §S2-OQ-05).
+   * Voltage Drop result. Always `null` in PR #4 / PR #4.x. Populated
+   * by Stage 2 PR #5 from the same Load Flow run (spec §S2-OQ-05).
    */
   voltageDrop: null;
 }
@@ -195,7 +202,7 @@ export async function runLoadFlowForAppNetwork(
     createdAt,
   });
 
-  return { result, snapshot, solverInput, voltageDrop: null };
+  return { loadFlow: result, snapshot, solverInput, voltageDrop: null };
 }
 
 interface FailureBundleArgs {
@@ -245,7 +252,7 @@ function makeFailureBundle(args: FailureBundleArgs): LoadFlowRunBundle {
   });
 
   return {
-    result,
+    loadFlow: result,
     snapshot: args.snapshot,
     solverInput: args.solverInput,
     voltageDrop: null,
