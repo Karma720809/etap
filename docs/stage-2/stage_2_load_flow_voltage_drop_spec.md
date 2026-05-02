@@ -650,6 +650,8 @@ defaults (§7.2) and is independent of bus band status.
 
 - Voltage Drop **cannot** run if Load Flow result is invalid or
   unavailable. This case raises `E-VD-001` (`voltage drop unavailable
+
+> PR #5 clarification: If Load Flow fails and Voltage Drop derivation is requested, `voltageDrop` shall contain a failed `VoltageDropResult` with `E-VD-001`, not `null`. `voltageDrop` remains `null` only when Voltage Drop derivation is not requested.
   because load flow invalid`).
 - Stage 2 PR #5 implementation note: when the Load Flow is `failed`
   and Voltage Drop derivation is requested
