@@ -22,6 +22,11 @@ import {
   SidecarTransportError,
   isSolverResult,
 } from "../src/sidecarClient.js";
+import {
+  DEFAULT_SHORT_CIRCUIT_OPTIONS,
+  type ShortCircuitRequest,
+  type ShortCircuitSidecarResponse,
+} from "../src/shortCircuit.js";
 import { StdioSidecarTransport } from "../src/stdioSidecarTransport.js";
 import {
   DEFAULT_SOLVER_OPTIONS,
@@ -326,5 +331,244 @@ echo '{"status":"succeeded","converged":true,"metadata":{"solverName":"pandapowe
     expect(parsed.inputVersion).toBe(SOLVER_INPUT_VERSION);
     expect(parsed.scenarioId).toBe("SCN-T");
     expect(parsed.options.enforceQLim).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 3 PR #3 — Short Circuit transport (`runShortCircuit`)
+// ---------------------------------------------------------------------------
+
+function minimalShortCircuitRequest(): ShortCircuitRequest {
+  return {
+    solverInput: minimalSolverInput(),
+    mode: "specific",
+    faultTargets: [{ busInternalId: "eq_bus_1" }],
+    shortCircuitOptions: DEFAULT_SHORT_CIRCUIT_OPTIONS,
+  };
+}
+
+function fakeShortCircuitResponse(): ShortCircuitSidecarResponse {
+  return {
+    status: "succeeded",
+    metadata: {
+      solverName: "pandapower",
+      solverVersion: "fake-2.14.10",
+      adapterVersion: "0.1.0",
+      options: { ...DEFAULT_SOLVER_OPTIONS },
+      executedAt: "2026-05-02T00:00:00Z",
+      inputHash: null,
+      networkHash: null,
+    },
+    shortCircuit: {
+      calculationCase: "maximum",
+      faultType: "threePhase",
+      computePeak: true,
+      computeThermal: true,
+      voltageFactor: 1.0,
+    },
+    buses: [
+      {
+        internalId: "eq_bus_1",
+        voltageLevelKv: 6.6,
+        ikssKa: 18.42,
+        ipKa: 41.18,
+        ithKa: 19.05,
+        skssMva: 351.2,
+        status: "valid",
+      },
+    ],
+    issues: [],
+  };
+}
+
+describe("StdioSidecarTransport.runShortCircuit — success path", () => {
+  it("forwards stdout JSON straight through when the sidecar succeeds", async () => {
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '${JSON.stringify(fakeShortCircuitResponse())}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    const out = await transport.runShortCircuit(minimalShortCircuitRequest());
+
+    expect(out.status).toBe("succeeded");
+    expect(out.buses).toHaveLength(1);
+    expect(out.buses[0]?.internalId).toBe("eq_bus_1");
+    expect(out.buses[0]?.ikssKa).toBe(18.42);
+    expect(out.shortCircuit.calculationCase).toBe("maximum");
+    expect(out.metadata.solverVersion).toBe("fake-2.14.10");
+  });
+
+  it("passes through structured failed_validation responses unchanged", async () => {
+    // The sidecar emits failed_validation when, e.g., the request
+    // refers to a bus that does not exist. The transport must surface
+    // the wire shape verbatim so the orchestrator can map E-SC-005 /
+    // E-SC-006 onto user-facing UI rather than inventing a status.
+    const failed: ShortCircuitSidecarResponse = {
+      ...fakeShortCircuitResponse(),
+      status: "failed_validation",
+      buses: [],
+      issues: [
+        {
+          code: "E-SC-005",
+          severity: "error",
+          message: "faultTarget busInternalId 'eq_bus_unknown' not present in solverInput.buses.",
+        },
+      ],
+    };
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '${JSON.stringify(failed)}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    const out = await transport.runShortCircuit(minimalShortCircuitRequest());
+    expect(out.status).toBe("failed_validation");
+    expect(out.issues[0]?.code).toBe("E-SC-005");
+  });
+
+  it("preserves null per-row numeric fields end-to-end", async () => {
+    const failedRow: ShortCircuitSidecarResponse = {
+      ...fakeShortCircuitResponse(),
+      buses: [
+        {
+          internalId: "eq_bus_1",
+          voltageLevelKv: null,
+          ikssKa: null,
+          ipKa: null,
+          ithKa: null,
+          skssMva: null,
+          status: "failed",
+          issueCodes: ["E-SC-001"],
+        },
+      ],
+    };
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '${JSON.stringify(failedRow)}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    const out = await transport.runShortCircuit(minimalShortCircuitRequest());
+    expect(out.buses[0]?.status).toBe("failed");
+    expect(out.buses[0]?.ikssKa).toBeNull();
+    expect(out.buses[0]?.ipKa).toBeNull();
+    expect(out.buses[0]?.ithKa).toBeNull();
+    expect(out.buses[0]?.skssMva).toBeNull();
+  });
+});
+
+describe("StdioSidecarTransport.runShortCircuit — failure path", () => {
+  it("throws SidecarTransportError when the sidecar exits non-zero", async () => {
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo "boom" >&2
+exit 7
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    await expect(
+      transport.runShortCircuit(minimalShortCircuitRequest()),
+    ).rejects.toBeInstanceOf(SidecarTransportError);
+  });
+
+  it("throws SidecarTransportError when stdout is not valid JSON", async () => {
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+printf 'not json'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    await expect(
+      transport.runShortCircuit(minimalShortCircuitRequest()),
+    ).rejects.toBeInstanceOf(SidecarTransportError);
+  });
+
+  it("throws SidecarTransportError when stdout JSON does not match the response shape", async () => {
+    // E.g., a response that uses the Load Flow status / metadata shape
+    // by mistake. The structural guard rejects it so the orchestrator
+    // (PR #4) can synthesize an E-SC-001 instead of letting a malformed
+    // wire payload reach normalization.
+    const broken = `{"status":"succeeded","converged":true,"metadata":{"solverName":"pandapower","solverVersion":"x","adapterVersion":"0.1.0","options":{"algorithm":"nr","tolerance":1e-8,"maxIter":50,"enforceQLim":false},"executedAt":"2026-05-02T00:00:00Z","inputHash":null,"networkHash":null},"buses":[],"branches":[],"issues":[]}`;
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '${broken}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    await expect(
+      transport.runShortCircuit(minimalShortCircuitRequest()),
+    ).rejects.toBeInstanceOf(SidecarTransportError);
+  });
+
+  it("throws SidecarTransportError when the response carries an unsupported calculationCase", async () => {
+    // The MVP only supports `calculationCase: "maximum"`; the structural
+    // guard rejects any other literal so that a regressed sidecar pin
+    // cannot leak `minimum` results into the orchestrator.
+    const broken: ShortCircuitSidecarResponse = {
+      ...fakeShortCircuitResponse(),
+      shortCircuit: {
+        ...fakeShortCircuitResponse().shortCircuit,
+        // The literal type only allows "maximum"; cast through unknown
+        // for the negative test.
+        calculationCase: "minimum" as unknown as "maximum",
+      },
+    };
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+cat > /dev/null
+echo '${JSON.stringify(broken)}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    await expect(
+      transport.runShortCircuit(minimalShortCircuitRequest()),
+    ).rejects.toBeInstanceOf(SidecarTransportError);
+  });
+});
+
+describe("StdioSidecarTransport.runShortCircuit — request serialization", () => {
+  it("writes a single JSON-Lines request with the run_short_circuit command", async () => {
+    const sentinel = join(tmpRoot, `sc-stdin-${Date.now()}.json`);
+    const argSentinel = join(tmpRoot, `sc-args-${Date.now()}.txt`);
+    const fake = makeFakeSidecar(
+      `#!/bin/bash
+echo "$@" > ${JSON.stringify(argSentinel)}
+cat > ${JSON.stringify(sentinel)}
+echo '${JSON.stringify(fakeShortCircuitResponse())}'
+`,
+    );
+    const transport = new StdioSidecarTransport(fake);
+
+    const request = minimalShortCircuitRequest();
+    await transport.runShortCircuit(request);
+
+    const { readFileSync } = await import("node:fs");
+    const stdinBody = readFileSync(sentinel, "utf-8");
+    const argLine = readFileSync(argSentinel, "utf-8").trim();
+
+    // The transport must invoke the sidecar with the run_short_circuit
+    // command — never reuse `run_load_flow`.
+    expect(argLine.endsWith("run_short_circuit")).toBe(true);
+    expect(stdinBody.endsWith("\n")).toBe(true);
+
+    const parsed = JSON.parse(stdinBody.trim());
+    expect(parsed.solverInput.inputVersion).toBe(SOLVER_INPUT_VERSION);
+    expect(parsed.mode).toBe("specific");
+    expect(parsed.faultTargets).toEqual([{ busInternalId: "eq_bus_1" }]);
+    expect(parsed.shortCircuitOptions).toEqual(DEFAULT_SHORT_CIRCUIT_OPTIONS);
   });
 });

@@ -1,5 +1,6 @@
 // Stage 2 PR #4 — Solver sidecar transport contract (browser-safe).
 // Stage 2 PR #5 — split: this file no longer imports `node:*`.
+// Stage 3 PR #3 — `runShortCircuit` added to the transport surface.
 //
 // The sidecar transport is the boundary between the TypeScript
 // solver adapter and the Python solver process. The contract types
@@ -10,17 +11,22 @@
 // (Vite) get the contract types and inject their own transport at
 // the React root.
 //
-// Stage 2 PR #4 wire format:
+// Wire format (identical for `run_load_flow` and `run_short_circuit`):
 //   - One process per call. The Node implementation spawns
-//       python3 <sidecarScriptPath> run_load_flow
-//     writes one JSON line (the `SolverInput`) to stdin, closes stdin,
+//       python3 <sidecarScriptPath> <command>
+//     writes one JSON line (the request) to stdin, closes stdin,
 //     reads stdout to EOF, and parses it as a single JSON value.
 //   - The sidecar exits 0 on a structured response (succeeded,
 //     failed_validation, or failed_solver). A non-zero exit means the
-//     transport itself failed and we must not invent a SolverResult —
-//     it is mapped to `E-LF-004` instead (see `runLoadFlow` in
-//     `loadFlow.ts`).
+//     transport itself failed and we must not invent a result — it
+//     maps to `E-LF-004` (Load Flow) or surfaces as a
+//     `SidecarTransportError` for Short Circuit (the orchestrator,
+//     Stage 3 PR #4, will project that into `E-SC-001`).
 
+import type {
+  ShortCircuitRequest,
+  ShortCircuitSidecarResponse,
+} from "./shortCircuit.js";
 import type { SolverInput, SolverResult } from "./types.js";
 
 /** Health-check payload returned by the sidecar's `health` command. */
@@ -41,7 +47,9 @@ export interface SidecarTransportOptions {
   sidecarScriptPath?: string;
   /**
    * Hard timeout per call. Defaults to 60s — enough for cold pandapower
-   * import + a small Load Flow. Exceeded calls map to `E-LF-004`.
+   * import + a small Load Flow. Exceeded calls map to `E-LF-004` for
+   * Load Flow and to a `SidecarTransportError` for Short Circuit (the
+   * Stage 3 PR #4 orchestrator projects that into `E-SC-001`).
    */
   timeoutMs?: number;
 }
@@ -49,10 +57,16 @@ export interface SidecarTransportOptions {
 /**
  * Single-call transport surface. The orchestrator owns either a
  * `StdioSidecarTransport` (production) or a stub (unit tests).
+ *
+ * Stage 3 PR #3 added `runShortCircuit`. The wire-shape contract is
+ * defined in `./shortCircuit.ts` (PR #2); this method only carries
+ * the request/response across the process boundary and rejects any
+ * payload that fails `isShortCircuitSidecarResponse`.
  */
 export interface SidecarTransport {
   health(): Promise<SidecarHealth>;
   runLoadFlow(input: SolverInput): Promise<SolverResult>;
+  runShortCircuit(request: ShortCircuitRequest): Promise<ShortCircuitSidecarResponse>;
 }
 
 /** Raised when the sidecar exits non-zero or returns malformed output. */

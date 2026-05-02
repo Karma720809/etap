@@ -1,7 +1,7 @@
-"""Stage 2 PR #4 — solver sidecar entry point with real Load Flow.
+"""Stage 2 PR #4 / Stage 3 PR #3 — solver sidecar entry point.
 
-This is the Python side of the Stage 2 solver adapter. It exposes two
-commands over stdio JSON-Lines transport:
+This is the Python side of the solver adapter. It exposes three commands
+over stdio JSON-Lines transport:
 
 - ``health`` — write a single JSON line describing sidecar version,
   contract version, and the detected pandapower version. Does not
@@ -14,24 +14,32 @@ commands over stdio JSON-Lines transport:
   structured response (including ``failed_validation`` /
   ``failed_solver`` outcomes) and exits non-zero only when the request
   cannot be parsed at all.
+- ``run_short_circuit`` (Stage 3 PR #3) — read **one** JSON line from
+  stdin (the ``ShortCircuitRequest`` produced by the TypeScript
+  adapter), run pandapower's IEC 60909 maximum 3-phase short-circuit
+  calculation, and write a single ``ShortCircuitSidecarResponse`` JSON
+  line to stdout. Same exit-code policy as ``run_load_flow``.
 
 Design notes:
 
-- One request per process. PR #4 deliberately does not introduce a
-  daemon lifecycle — the TypeScript client spawns a fresh process per
-  call. Daemon mode and FastAPI are deferred (see hosting decision §6).
+- One request per process. The TypeScript client spawns a fresh process
+  per call. Daemon mode and FastAPI are deferred (see hosting decision
+  §6).
 - No fake numerical values are emitted. If pandapower is not installed,
   ``run_load_flow`` returns a structured ``E-LF-004`` issue and
-  ``status = "failed_solver"`` with empty ``buses`` / ``branches``.
+  ``run_short_circuit`` returns a structured ``E-SC-001`` issue, both
+  with ``status = "failed_solver"`` and empty result rows.
 - The contract types live in :mod:`contracts`. Drift between the
-  TypeScript ``SolverInput`` / ``SolverResult`` and this module would
-  surface as a contract-level test failure.
+  TypeScript wire shapes and this module would surface as a
+  contract-level test failure.
 
 Usage::
 
     python services/solver-sidecar/src/main.py health
     echo '<solver-input.json>' | \
         python services/solver-sidecar/src/main.py run_load_flow
+    echo '<short-circuit-request.json>' | \
+        python services/solver-sidecar/src/main.py run_short_circuit
 """
 
 from __future__ import annotations
@@ -184,10 +192,57 @@ def _run_load_flow_command() -> int:
     return 0
 
 
+def _stub_short_circuit_metadata_block() -> Dict[str, Any]:
+    """Default metadata block stamped on malformed-request responses.
+
+    The TypeScript structural guard rejects any other literal for
+    ``calculationCase`` / ``faultType`` (S3-OQ-02 / S3-OQ-03), so even
+    pre-parse failure responses must carry the pinned MVP values.
+    """
+
+    return {
+        "calculationCase": "maximum",
+        "faultType": "threePhase",
+        "computePeak": True,
+        "computeThermal": True,
+        "voltageFactor": 1.0,
+    }
+
+
+def _run_short_circuit_command() -> int:
+    # Lazy import — the short_circuit module pulls in pandapower
+    # transitively at call time, identical to load_flow.
+    from short_circuit import run_short_circuit
+
+    try:
+        request = _read_one_request()
+    except ValueError as exc:
+        _emit(
+            {
+                "status": "failed_validation",
+                "metadata": _stub_metadata(),
+                "shortCircuit": _stub_short_circuit_metadata_block(),
+                "buses": [],
+                "issues": [
+                    {
+                        "code": "E-SC-005",
+                        "severity": "error",
+                        "message": f"malformed request: {exc}",
+                    }
+                ],
+            }
+        )
+        return 0
+
+    response = run_short_circuit(request)
+    _emit(dict(response))
+    return 0
+
+
 def main(argv: List[str]) -> int:
     if len(argv) < 2:
         sys.stderr.write("usage: main.py <command>\n")
-        sys.stderr.write("commands: health, run_load_flow\n")
+        sys.stderr.write("commands: health, run_load_flow, run_short_circuit\n")
         return 2
 
     command = argv[1]
@@ -196,6 +251,8 @@ def main(argv: List[str]) -> int:
         return 0
     if command == "run_load_flow":
         return _run_load_flow_command()
+    if command == "run_short_circuit":
+        return _run_short_circuit_command()
 
     sys.stderr.write(f"unknown command: {command}\n")
     return 2

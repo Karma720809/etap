@@ -86,6 +86,10 @@ class StubTransport implements SidecarTransport {
   async runLoadFlow(input: SolverInput): Promise<SolverResult> {
     return fakeSolverResult(input);
   }
+  async runShortCircuit(): Promise<never> {
+    // Stage 3 PR #3 — calculationStore tests do not exercise Short Circuit.
+    throw new Error("StubTransport.runShortCircuit not implemented for calculationStore tests");
+  }
 }
 
 interface Captured {
