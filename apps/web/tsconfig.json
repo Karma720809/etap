@@ -12,6 +12,8 @@
     { "path": "../../packages/core-model" },
     { "path": "../../packages/project-io" },
     { "path": "../../packages/validation" },
-    { "path": "../../packages/fixtures" }
+    { "path": "../../packages/fixtures" },
+    { "path": "../../packages/network-model" },
+    { "path": "../../packages/solver-adapter" }
   ]
 }

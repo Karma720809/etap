@@ -30,7 +30,7 @@ import { runLoadFlowForAppNetwork } from "../src/loadFlow.js";
 import {
   StdioSidecarTransport,
   DEFAULT_SIDECAR_SCRIPT_PATH,
-} from "../src/sidecarClient.js";
+} from "../src/stdioSidecarTransport.js";
 
 const SHOULD_RUN = process.env.RUN_SIDECAR_INTEGRATION === "1";
 const PYTHON = process.env.SOLVER_PYTHON ?? "python3";
@@ -155,6 +155,24 @@ describeIntegration("Load Flow integration — real Python sidecar", () => {
     expect(bundle.loadFlow.metadata.solverName).toBe("pandapower");
     expect(bundle.loadFlow.metadata.solverVersion).not.toBe("unavailable");
     expect(bundle.snapshot.snapshotId).toBe(bundle.loadFlow.runtimeSnapshotId);
+
+    // Stage 2 PR #5: Voltage Drop derives from the same Load Flow
+    // result. The bundle should carry a real VoltageDropResult (not
+    // null), one row per branch, with the spec §7.2 default limits.
+    expect(bundle.voltageDrop).not.toBeNull();
+    expect(bundle.voltageDrop?.branchResults.length).toBe(
+      bundle.loadFlow.branchResults.length,
+    );
+    const txDrop = bundle.voltageDrop?.branchResults.find(
+      (br) => br.branchInternalId === "eq_tr",
+    );
+    expect(txDrop).toBeDefined();
+    expect(txDrop?.branchKind).toBe("transformer");
+    expect(txDrop?.limitPct).toBeCloseTo(5.0, 6);
+    // Light load on the LV side → drop magnitude is small but
+    // non-negative under the spec's direction rule.
+    expect(txDrop?.voltageDropPct).not.toBeNull();
+    expect(txDrop?.voltageDropPct ?? -1).toBeGreaterThanOrEqual(0);
     // Two spawn calls (health + runLoadFlow) each pay the cold import
     // cost. The vitest-level timeout matches the worst-case observed
     // runtime on stock CPython without numba.

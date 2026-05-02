@@ -1,14 +1,17 @@
-// Stage 2 PR #4 — TypeScript client for the Python solver sidecar.
+// Stage 2 PR #4 — Solver sidecar transport contract (browser-safe).
+// Stage 2 PR #5 — split: this file no longer imports `node:*`.
 //
-// The client owns the TS side of the stdio JSON-Lines transport
-// (`solver_adapter_hosting_decision.md` §4 / spec §16). It does NOT
-// own the orchestrator that turns an `AppNetwork` into a normalized
-// Load Flow result — that lives in `loadFlow.ts`. The client is
-// intentionally decoupled into a transport interface so that
-// orchestrator tests can inject a mock without spawning Python.
+// The sidecar transport is the boundary between the TypeScript
+// solver adapter and the Python solver process. The contract types
+// live here so the orchestrator and any UI code can depend on them
+// without pulling in `node:child_process`. The real stdio
+// implementation lives in `stdioSidecarTransport.ts` and is loaded
+// lazily — Node-only call sites import it directly; browser bundles
+// (Vite) get the contract types and inject their own transport at
+// the React root.
 //
 // Stage 2 PR #4 wire format:
-//   - One process per call. The adapter spawns
+//   - One process per call. The Node implementation spawns
 //       python3 <sidecarScriptPath> run_load_flow
 //     writes one JSON line (the `SolverInput`) to stdin, closes stdin,
 //     reads stdout to EOF, and parses it as a single JSON value.
@@ -17,37 +20,8 @@
 //     transport itself failed and we must not invent a SolverResult —
 //     it is mapped to `E-LF-004` instead (see `runLoadFlow` in
 //     `loadFlow.ts`).
-//
-// Why one-shot rather than a long-lived daemon? Spec §16 / hosting
-// decision §6: keep the MVP transport minimal. A long-lived process,
-// graceful restart, request-id correlation, and lifecycle teardown
-// are all deferred to a later PR. Spawn-per-call is honest and
-// trivially testable.
-
-import { spawn } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { SolverInput, SolverResult } from "./types.js";
-
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-
-/**
- * Default location of the Python sidecar entry point relative to this
- * package. Resolves to `<repo>/services/solver-sidecar/src/main.py`.
- */
-export const DEFAULT_SIDECAR_SCRIPT_PATH = resolve(
-  moduleDir,
-  "..",
-  "..",
-  "..",
-  "services",
-  "solver-sidecar",
-  "src",
-  "main.py",
-);
-
-export const DEFAULT_PYTHON_EXECUTABLE = "python3";
 
 /** Health-check payload returned by the sidecar's `health` command. */
 export interface SidecarHealth {
@@ -96,157 +70,6 @@ export class SidecarTransportError extends Error {
     this.exitCode = args.exitCode;
     this.stdout = args.stdout;
     this.stderr = args.stderr;
-  }
-}
-
-interface InvokeResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function spawnSidecar(
-  command: string,
-  args: string[],
-  stdin: string | null,
-  timeoutMs: number,
-): Promise<InvokeResult> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-
-    child.stdout.setEncoding("utf-8");
-    child.stderr.setEncoding("utf-8");
-
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-
-    child.on("error", (err) => {
-      clearTimeout(timeout);
-      rejectPromise(err);
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (timedOut) {
-        rejectPromise(
-          new SidecarTransportError(
-            `solver sidecar timed out after ${timeoutMs}ms`,
-            { exitCode: code, stdout, stderr },
-          ),
-        );
-        return;
-      }
-      resolvePromise({ exitCode: code, stdout, stderr });
-    });
-
-    if (stdin !== null) {
-      child.stdin.write(stdin);
-    }
-    child.stdin.end();
-  });
-}
-
-function parseFirstJsonLine(stdout: string): unknown {
-  const trimmed = stdout.trim();
-  if (trimmed.length === 0) {
-    throw new SidecarTransportError(
-      "solver sidecar produced no output on stdout",
-      { exitCode: 0, stdout, stderr: "" },
-    );
-  }
-  // The sidecar writes one JSON value followed by a newline. Some
-  // shells / wrappers may append extra trailing whitespace; parse the
-  // entire trimmed stdout as a single JSON value to stay tolerant.
-  try {
-    return JSON.parse(trimmed);
-  } catch (err) {
-    const firstLine = trimmed.split("\n", 1)[0] ?? trimmed;
-    try {
-      return JSON.parse(firstLine);
-    } catch {
-      throw new SidecarTransportError(
-        `solver sidecar emitted unparseable JSON: ${(err as Error).message}`,
-        { exitCode: 0, stdout, stderr: "" },
-      );
-    }
-  }
-}
-
-/**
- * Real stdio JSON-Lines transport. One short-lived child process per
- * call; no warm pool, no daemon.
- */
-export class StdioSidecarTransport implements SidecarTransport {
-  private readonly pythonExecutable: string;
-  private readonly sidecarScriptPath: string;
-  private readonly timeoutMs: number;
-
-  constructor(options: SidecarTransportOptions = {}) {
-    this.pythonExecutable = options.pythonExecutable ?? DEFAULT_PYTHON_EXECUTABLE;
-    this.sidecarScriptPath = options.sidecarScriptPath ?? DEFAULT_SIDECAR_SCRIPT_PATH;
-    this.timeoutMs = options.timeoutMs ?? 60_000;
-  }
-
-  async health(): Promise<SidecarHealth> {
-    const result = await spawnSidecar(
-      this.pythonExecutable,
-      [this.sidecarScriptPath, "health"],
-      null,
-      this.timeoutMs,
-    );
-    if (result.exitCode !== 0) {
-      throw new SidecarTransportError(
-        `solver sidecar health exited ${result.exitCode}`,
-        result,
-      );
-    }
-    const parsed = parseFirstJsonLine(result.stdout);
-    if (!isSidecarHealth(parsed)) {
-      throw new SidecarTransportError(
-        "solver sidecar health payload missing required fields",
-        result,
-      );
-    }
-    return parsed;
-  }
-
-  async runLoadFlow(input: SolverInput): Promise<SolverResult> {
-    const requestLine = JSON.stringify(input) + "\n";
-    const result = await spawnSidecar(
-      this.pythonExecutable,
-      [this.sidecarScriptPath, "run_load_flow"],
-      requestLine,
-      this.timeoutMs,
-    );
-    if (result.exitCode !== 0) {
-      throw new SidecarTransportError(
-        `solver sidecar run_load_flow exited ${result.exitCode}`,
-        result,
-      );
-    }
-    const parsed = parseFirstJsonLine(result.stdout);
-    if (!isSolverResult(parsed)) {
-      throw new SidecarTransportError(
-        "solver sidecar response did not match SolverResult shape",
-        result,
-      );
-    }
-    return parsed;
   }
 }
 

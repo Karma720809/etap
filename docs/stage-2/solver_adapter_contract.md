@@ -5,6 +5,7 @@
 **Implements:** `stage_2_load_flow_voltage_drop_spec.md` §8 (A2 / A3)
 **Authoring PR:** Stage 2 PR #3 — Solver Adapter Contract + Python Sidecar
 **Activated by:** Stage 2 PR #4 — Real Load Flow execution + result normalization
+**Extended by:** Stage 2 PR #5 — Voltage Drop derivation + UI tables / overlay
 **Companion decision:** `solver_adapter_hosting_decision.md` (S2-FU-01)
 **Date:** 2026-05-02
 
@@ -339,27 +340,146 @@ the sidecar; the wire format always uses `internalId`.
   gated behind `RUN_SIDECAR_INTEGRATION=1` that exercises the full
   TS↔Python boundary.
 
-### 5.3 Does not ship (still deferred)
+### 5.3 Ships in PR #5
 
-- Voltage Drop derivation — Stage 2 PR #5.
+- `VoltageDropResult` / `VoltageDropBranchResult` /
+  `VoltageDropIssue` / `VoltageDropTotals` types
+  (`packages/solver-adapter/src/voltageDrop.ts`).
+- Pure `deriveVoltageDrop(loadFlow, appNetwork, options)` function
+  that derives Voltage Drop from a normalized `LoadFlowResult`
+  without spawning the sidecar (spec §S2-OQ-05 / §7.1). Direction
+  is decided from real-power flow on the load-flow branch row;
+  status mapping follows spec §7.3.1.
+- Default per-kind Voltage Drop limits exposed as
+  `DEFAULT_VOLTAGE_DROP_LIMIT_CABLE_PCT` (3.0%) and
+  `DEFAULT_VOLTAGE_DROP_LIMIT_TRANSFORMER_PCT` (5.0%), aligned with
+  spec §7.2. Both are overridable per call via
+  `RunLoadFlowOptions.voltageDropCableLimitPct` /
+  `voltageDropTransformerLimitPct`.
+- `RunLoadFlowOptions.includeVoltageDrop` (default `true`). When
+  `true`, the bundle's `voltageDrop` carries a real
+  `VoltageDropResult`; when `false`, the field is `null`. When the
+  Load Flow itself is `failed`, the bundle still carries a
+  structured failed `VoltageDropResult` whose `issues` includes
+  `E-VD-001`, so the UI can surface the cause without re-running.
+- Sidecar transport split: `sidecarClient.ts` keeps only the
+  browser-safe contract types and structural guards;
+  `stdioSidecarTransport.ts` owns the Node-only
+  `StdioSidecarTransport` (which still imports
+  `node:child_process`). The orchestrator dynamically loads the
+  Node module only when no transport is injected, so browser
+  bundles can import the orchestrator without resolving Node
+  built-ins. `StdioSidecarTransport` is therefore intentionally NOT
+  re-exported from the package index; Node callers import it from
+  the relative subpath.
+- `apps/web` calculation run path: `CalculationProvider` /
+  `useCalculation` runtime store, `CalculationStatusPanel` Run
+  controls, `ResultTables` (Load Flow buses / branches / Voltage
+  Drop), and a basic diagram overlay that adds bus voltage % and
+  per-branch current/loading/VD % once a real result exists. The
+  store is runtime-only: `calculationResults` is never added to the
+  project file, and `calculationSnapshots` remains empty per spec
+  §10.
+
+### 5.4 Does not ship (still deferred)
+
 - Splitting `RuntimeCalculationSnapshot` and `LoadFlowResult` out
   into a dedicated `packages/calculation-store` package. The Stage 2
   spec §8.1 / §16 plans for these types to live alongside the
-  retention store in PR #6. PR #4 keeps them in
+  retention store in PR #6. PR #4 / PR #5 keep them in
   `packages/solver-adapter` because no downstream consumer requires
   the package split yet, and creating an empty package would only
   add churn. The split is tracked as a non-blocking follow-up to
   Stage 2 PR #6.
-- UI result tables / diagram overlay — Stage 2 PR #5.
 - Daemon / long-running sidecar / FastAPI transport — deferred.
+- Browser ↔ sidecar bridge — PR #5 keeps the seam visible: in a
+  plain browser build no transport is configured and the Run button
+  disables itself with a clear message. A future desktop wrapper
+  (Electron / Tauri) injects `StdioSidecarTransport` at the React
+  root.
 - Disk persistence of runtime snapshots / results — deferred
   (S2-FU-07).
+- Stale-result `status` thread-through into `CalculationResultBundle.status`
+  / store retention — Stage 2 PR #6. PR #5 surfaces stale through
+  the runtime UI store only.
 - Multi-utility / multi-slack support — deferred (S2-FU-03).
 - Cable loading-vs-rating — the `SolverLine` contract does not yet
   carry cable ampacity; cable `loadingPct` is reported as `null`
   until that field is wired through.
 - `inputHash` / `networkHash` byte-stable serializer — reserved
   (S2-FU-04).
+- Project-level Voltage Drop limit setting — the spec §7.2 defaults
+  are wired into `deriveVoltageDrop` and overridable per call;
+  surfacing them as project preferences is post-Stage-2.
+
+---
+
+## 5a. Voltage Drop result shape (PR #5)
+
+`VoltageDropResult` is a runtime-only type held alongside
+`LoadFlowResult` on `LoadFlowRunBundle`. It is never persisted to disk
+or written to the Stage 1 canonical project file.
+
+```ts
+type VoltageDropStatus = "valid" | "warning" | "failed";
+type VoltageDropBranchStatus = "ok" | "warning" | "violation" | "unavailable";
+type VoltageDropIssueCode = "E-VD-001" | "E-VD-002" | "W-VD-001" | "W-VD-002";
+
+interface VoltageDropResult {
+  resultId: string;
+  sourceLoadFlowResultId: string;
+  runtimeSnapshotId: string;
+  scenarioId: string | null;
+  createdAt: string;
+  status: VoltageDropStatus;
+  branchResults: VoltageDropBranchResult[];
+  issues: VoltageDropIssue[];
+  totals: VoltageDropTotals;
+  limits: { cablePct: number; transformerPct: number };
+}
+
+interface VoltageDropBranchResult {
+  branchInternalId: string;
+  sourceEquipmentInternalId: string;
+  branchKind: "cable" | "transformer";
+  fromBusInternalId: string;
+  toBusInternalId: string;
+  fromBusTag: string | null;
+  toBusTag: string | null;
+  sendingBusInternalId: string | null;
+  receivingBusInternalId: string | null;
+  sendingEndVoltagePu: number | null;
+  receivingEndVoltagePu: number | null;
+  sendingEndVoltageV: number | null;
+  receivingEndVoltageV: number | null;
+  voltageDropPu: number | null;
+  voltageDropV: number | null;
+  voltageDropPct: number | null;
+  limitPct: number;
+  status: VoltageDropBranchStatus;
+  issueCodes: VoltageDropIssueCode[];
+}
+```
+
+The PR #5 derivation rules:
+
+1. If `loadFlow.status === "failed"`, return `status: "failed"` with a
+   single `E-VD-001` issue and empty `branchResults` (spec §7.4).
+2. If either endpoint bus voltage is missing from `loadFlow.busResults`,
+   the branch row is `status: "unavailable"`, all numeric fields are
+   `null`, and the row carries `E-VD-002` in `issueCodes`. The result's
+   top-level `issues` array also contains the per-row `E-VD-002`.
+3. Otherwise, `voltageDropV = sendingEndVoltageV − receivingEndVoltageV`
+   and `voltageDropPct = voltageDropV / sendingEndVoltageV * 100`
+   (spec §7.1). Sending vs receiving direction follows the sign of
+   `LoadFlowBranchResult.pMwFrom`.
+4. Per-branch status (spec §7.3.1):
+   - `|drop| ≤ 0.9 × limit` → `ok`
+   - `0.9 × limit < |drop| ≤ limit` → `warning` (raises `W-VD-002`)
+   - `|drop| > limit` → `violation` (raises `W-VD-001`)
+5. Default limits: 3.0% (cable), 5.0% (transformer). Overridable per
+   call via `RunLoadFlowOptions.voltageDropCableLimitPct` and
+   `voltageDropTransformerLimitPct`.
 
 ---
 
