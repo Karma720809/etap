@@ -1,24 +1,35 @@
 // Stage 2 PR #5 — Runtime Calculation store wiring (PR #6 refactor).
+// Stage 3 PR #5 — added a parallel Short Circuit active slot + run path.
 //
 // PR #5 introduced this React-side store that holds the runtime
 // `LoadFlowRunBundle` outside the canonical project file. PR #6
 // extracts the type / reducer / retention rules into
 // `@power-system-study/calculation-store` so the same logic can be
-// reused outside React. This file now only owns the React glue:
-// provider, transport injection, project-edit stale detection, and
-// the readiness-driven `disabledReason` text.
+// reused outside React. This file owns the React glue: provider,
+// transport injection, project-edit stale detection, and the
+// readiness-driven `disabledReason` text.
 //
-// Guardrails preserved (spec §10 / §17 / S2-OQ-06):
-//   - The runtime bundle is held outside `PowerSystemProjectFile`.
+// Stage 3 PR #5 adds a Short Circuit active slot. The underlying
+// `calculation-store` reducer's `state.bundle` slot is intentionally
+// LF-narrow (spec §8.2.1) — Short Circuit successes still flow
+// through `runSucceeded` so the calculation-store reducer retains
+// them under the `short_circuit_bundle` key, but they do not displace
+// the active LF slot. The React layer keeps its own SC lifecycle
+// state so the panel and result table can render Short Circuit
+// without the underlying store package growing a second active slot.
+//
+// Guardrails preserved (spec §10 / §17 / S2-OQ-06 / S3-OQ-09):
+//   - The runtime bundles are held outside `PowerSystemProjectFile`.
 //     The serialized JSON does not grow `calculationResults`, and the
 //     project file's `calculationSnapshots` array stays empty.
 //   - Stale tracking is best-effort: when the project ref changes,
-//     the store dispatches `markStale`. We do not auto-rerun.
+//     the store dispatches `markStale` and flips the React-side SC
+//     lifecycle to `"stale"`. We do not auto-rerun.
 //   - The transport that talks to the Python sidecar is **injected**
 //     at the React root. In tests we inject a stub. In a real desktop
 //     build the StdioSidecarTransport from solver-adapter is the
 //     intended choice. In a plain browser build no transport is
-//     configured and the Run button disables itself with a clear
+//     configured and the Run buttons disable themselves with a clear
 //     message — this PR does not ship a browser↔sidecar bridge.
 
 import {
@@ -38,7 +49,9 @@ import {
 } from "@power-system-study/network-model";
 import {
   runLoadFlowForAppNetwork,
+  runShortCircuitForAppNetwork,
   type LoadFlowRunBundle,
+  type ShortCircuitRunBundle,
   type SidecarTransport,
 } from "@power-system-study/solver-adapter";
 import {
@@ -63,14 +76,117 @@ export type {
 };
 export { initialCalculationStoreState as initialCalculationState };
 
+/**
+ * Lifecycle of the React-side Short Circuit active slot. Mirrors the
+ * `CalculationLifecycle` vocabulary used for Load Flow but tracks the
+ * SC run independently (spec §8.2.1 — the SC active slot is a React-
+ * side parallel of the LF-narrow store slot).
+ */
+export type ShortCircuitLifecycle =
+  | "idle"
+  | "running"
+  | "succeeded"
+  | "warning"
+  | "failed"
+  | "stale";
+
+/** React-side Short Circuit active state. Held outside the project file. */
+export interface ShortCircuitState {
+  lifecycle: ShortCircuitLifecycle;
+  /** Latest active SC bundle. `null` until a real run has happened. */
+  bundle: ShortCircuitRunBundle | null;
+  /** Network build for the active SC bundle. */
+  build: NetworkBuildResult | null;
+  /** Top-level error when the SC run could not start (e.g., no transport). */
+  startError: string | null;
+  /** ISO timestamp of the latest SC run. */
+  lastRunAt: string | null;
+}
+
+const initialShortCircuitState: ShortCircuitState = {
+  lifecycle: "idle",
+  bundle: null,
+  build: null,
+  startError: null,
+  lastRunAt: null,
+};
+
+type ShortCircuitAction =
+  | { type: "scStarted"; at: string }
+  | {
+      type: "scSucceeded";
+      bundle: ShortCircuitRunBundle;
+      build: NetworkBuildResult;
+      at: string;
+      /** Top-level SC status: "valid" | "warning" → succeeded/warning lifecycle. */
+      finalStatus: "valid" | "warning";
+    }
+  | {
+      type: "scFailed";
+      at: string;
+      message: string;
+      bundle?: ShortCircuitRunBundle;
+      build?: NetworkBuildResult | null;
+    }
+  | { type: "scMarkStale" }
+  | { type: "scClear" };
+
+function shortCircuitReducer(
+  state: ShortCircuitState,
+  action: ShortCircuitAction,
+): ShortCircuitState {
+  switch (action.type) {
+    case "scStarted":
+      return {
+        ...state,
+        lifecycle: "running",
+        lastRunAt: action.at,
+        startError: null,
+      };
+    case "scSucceeded":
+      return {
+        ...state,
+        lifecycle: action.finalStatus === "warning" ? "warning" : "succeeded",
+        bundle: action.bundle,
+        build: action.build,
+        startError: null,
+        lastRunAt: action.at,
+      };
+    case "scFailed":
+      return {
+        ...state,
+        lifecycle: "failed",
+        ...(action.bundle !== undefined ? { bundle: action.bundle } : {}),
+        ...(action.build !== undefined ? { build: action.build } : {}),
+        startError: action.message,
+        lastRunAt: action.at,
+      };
+    case "scMarkStale":
+      // Only flip to stale when there was an active SC bundle to mark
+      // as stale. Idempotent — already-stale state is preserved.
+      if (state.bundle === null || state.lifecycle === "stale") return state;
+      return { ...state, lifecycle: "stale" };
+    case "scClear":
+      return initialShortCircuitState;
+  }
+}
+
 export interface CalculationContextValue {
   state: CalculationStoreState;
-  /** True when readiness allows the user to click Run. */
+  /** React-side Short Circuit active slot (spec §8.2.1). */
+  shortCircuit: ShortCircuitState;
+  /** True when readiness allows the user to click Run Load Flow / Voltage Drop. */
   canRun: boolean;
-  /** Reason the Run button is disabled, when applicable. */
+  /** Reason the Load Flow Run button is disabled, when applicable. */
   disabledReason: string | null;
-  /** Trigger the Run path. Resolves once the bundle settles or the run errors out. */
+  /** True when readiness allows the user to click Run Short Circuit. */
+  canRunShortCircuit: boolean;
+  /** Reason the Short Circuit Run button is disabled, when applicable. */
+  shortCircuitDisabledReason: string | null;
+  /** Trigger the Load Flow + Voltage Drop run. */
   runCalculation: () => Promise<void>;
+  /** Trigger the Short Circuit run (Stage 3 PR #5). */
+  runShortCircuit: () => Promise<void>;
   resetCalculation: () => void;
 }
 
@@ -85,7 +201,7 @@ export interface CalculationProviderProps {
    */
   validation: ValidationSummary;
   /**
-   * Solver transport. When omitted, the Run button is disabled with
+   * Solver transport. When omitted, the Run buttons are disabled with
    * an explanation. Tests inject a stub transport; a desktop wrapper
    * would inject `new StdioSidecarTransport()`.
    */
@@ -105,6 +221,10 @@ export function CalculationProvider({
     calculationReducer,
     initialCalculationStoreState,
   );
+  const [shortCircuit, dispatchSc] = useReducer(
+    shortCircuitReducer,
+    initialShortCircuitState,
+  );
   const lastProjectRef = useRef(projectState.project);
   const nowFn = now ?? (() => new Date().toISOString());
 
@@ -120,6 +240,17 @@ export function CalculationProvider({
       // but we follow the framework rule and dispatch via
       // queueMicrotask to avoid the warning.
       queueMicrotask(() => dispatch({ type: "markStale" }));
+    }
+    // Stage 3 PR #5: parallel SC stale tracking. The calculation-
+    // store reducer's `markStale` already flips the retained SC
+    // record's stale flag (spec §8.2.1); the SC active slot lives in
+    // React state and needs its own stale flip so the UI panel
+    // surfaces a stale badge for the SC module.
+    if (shortCircuit.bundle !== null && shortCircuit.lifecycle !== "stale") {
+      queueMicrotask(() => {
+        dispatch({ type: "markStale" });
+        dispatchSc({ type: "scMarkStale" });
+      });
     }
   }
 
@@ -143,6 +274,27 @@ export function CalculationProvider({
 
   const canRun = disabledReason === null;
 
+  const shortCircuitDisabledReason = useMemo<string | null>(() => {
+    if (shortCircuit.lifecycle === "running") return "A Short Circuit run is already in progress.";
+    if (state.lifecycle === "running") return "A calculation run is already in progress.";
+    if (hasValidationErrors) {
+      const n = errorIssues.length;
+      return `Fix ${n} validation error${n === 1 ? "" : "s"} before running.`;
+    }
+    if (!transport) {
+      return "Solver transport is not configured in this build. Wire a SidecarTransport to enable runs.";
+    }
+    return null;
+  }, [
+    shortCircuit.lifecycle,
+    state.lifecycle,
+    hasValidationErrors,
+    errorIssues.length,
+    transport,
+  ]);
+
+  const canRunShortCircuit = shortCircuitDisabledReason === null;
+
   const runCalculation = useCallback(async () => {
     if (!transport) {
       dispatch({
@@ -156,10 +308,6 @@ export function CalculationProvider({
     try {
       const build: NetworkBuildResult = buildAppNetwork(projectState.project);
       if (build.appNetwork === null) {
-        // Network construction failed before the sidecar would have been
-        // called. Surface the first network issue as the run-start error
-        // so the UI shows a real diagnostic instead of silently doing
-        // nothing.
         const first = build.issues[0];
         dispatch({
           type: "runFailed",
@@ -180,9 +328,6 @@ export function CalculationProvider({
         },
       );
       const at = nowFn();
-      // Spec §10.2: a failed loadFlow still ships a real bundle with
-      // a real snapshot. Route through `runFailed` so the snapshot
-      // gets retained for audit (PR #6 retention rule §10.5).
       if (bundle.loadFlow.status === "failed") {
         const firstError = bundle.loadFlow.issues.find((i) => i.severity === "error");
         dispatch({
@@ -204,13 +349,131 @@ export function CalculationProvider({
     }
   }, [transport, projectState.project, nowFn]);
 
+  const runShortCircuit = useCallback(async () => {
+    if (!transport) {
+      dispatchSc({
+        type: "scFailed",
+        message: "No solver transport configured.",
+        at: nowFn(),
+      });
+      return;
+    }
+    const startedAt = nowFn();
+    dispatchSc({ type: "scStarted", at: startedAt });
+    // Mirror the LF reducer's "running" lifecycle so the LF Run button
+    // also disables while SC is in flight (a single sidecar transport
+    // serves both modules; concurrent calls would race the stdio).
+    dispatch({ type: "runStarted", at: startedAt });
+    try {
+      const build: NetworkBuildResult = buildAppNetwork(projectState.project);
+      if (build.appNetwork === null) {
+        const first = build.issues[0];
+        const message = first
+          ? `${first.code}: ${first.message}`
+          : "AppNetwork construction failed.";
+        const failedAt = nowFn();
+        dispatchSc({
+          type: "scFailed",
+          message,
+          at: failedAt,
+        });
+        // The LF reducer needs to leave the "running" lifecycle.
+        // Pre-bundle failure path: no bundle, just a startError.
+        dispatch({
+          type: "runFailed",
+          at: failedAt,
+          message,
+          build,
+          reason: "validation_failure",
+        });
+        return;
+      }
+      const bundle: ShortCircuitRunBundle = await runShortCircuitForAppNetwork(
+        build.appNetwork,
+        {
+          transport,
+          projectId: projectState.project.project.projectId,
+        },
+      );
+      const at = nowFn();
+      const status = bundle.shortCircuit.status;
+      if (status === "failed") {
+        const firstError = bundle.shortCircuit.issues.find(
+          (i) => i.severity === "error",
+        );
+        const message = firstError
+          ? `${firstError.code}: ${firstError.message}`
+          : "Short Circuit failed.";
+        dispatchSc({
+          type: "scFailed",
+          at,
+          message,
+          bundle,
+          build,
+        });
+        // Route the failed SC bundle through the calculation-store
+        // reducer so its snapshot is retained on `lastFailedSnapshot`
+        // (spec §8.2 retention rules apply to SC the same as LF).
+        dispatch({
+          type: "runFailed",
+          at,
+          message,
+          bundle,
+          build,
+          reason: "runtime_failure",
+        });
+      } else {
+        dispatchSc({
+          type: "scSucceeded",
+          at,
+          bundle,
+          build,
+          finalStatus: status,
+        });
+        // The calculation-store reducer retains the SC bundle under
+        // the `short_circuit_bundle` key but does NOT displace the
+        // active LF slot (see spec §8.2.1 + reducer comment in
+        // packages/calculation-store/src/reducer.ts). Lifecycle on
+        // `state` reverts to "succeeded" if there was a prior LF
+        // bundle, or stays "succeeded" / falls through.
+        dispatch({ type: "runSucceeded", bundle, build, at });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const at = nowFn();
+      dispatchSc({ type: "scFailed", message, at });
+      dispatch({ type: "runFailed", message, at });
+    }
+  }, [transport, projectState.project, nowFn]);
+
   const resetCalculation = useCallback(() => {
     dispatch({ type: "clearResults" });
+    dispatchSc({ type: "scClear" });
   }, []);
 
   const value = useMemo<CalculationContextValue>(
-    () => ({ state, canRun, disabledReason, runCalculation, resetCalculation }),
-    [state, canRun, disabledReason, runCalculation, resetCalculation],
+    () => ({
+      state,
+      shortCircuit,
+      canRun,
+      disabledReason,
+      canRunShortCircuit,
+      shortCircuitDisabledReason,
+      runCalculation,
+      runShortCircuit,
+      resetCalculation,
+    }),
+    [
+      state,
+      shortCircuit,
+      canRun,
+      disabledReason,
+      canRunShortCircuit,
+      shortCircuitDisabledReason,
+      runCalculation,
+      runShortCircuit,
+      resetCalculation,
+    ],
   );
 
   return createElement(CalculationContext.Provider, { value }, children);

@@ -18,6 +18,8 @@ import { getDemoFixture } from "@power-system-study/fixtures";
 import { serializeProjectFile } from "@power-system-study/project-io";
 import {
   SOLVER_INPUT_VERSION,
+  type ShortCircuitRequest,
+  type ShortCircuitSidecarResponse,
   type SidecarHealth,
   type SidecarTransport,
   type SolverInput,
@@ -72,6 +74,40 @@ function fakeSolverResult(input: SolverInput): SolverResult {
   };
 }
 
+function fakeShortCircuitResponse(
+  request: ShortCircuitRequest,
+): ShortCircuitSidecarResponse {
+  return {
+    status: "succeeded",
+    metadata: {
+      solverName: "pandapower",
+      solverVersion: "stub",
+      adapterVersion: "stub",
+      options: request.solverInput.options,
+      executedAt: "2026-05-02T00:00:00Z",
+      inputHash: null,
+      networkHash: null,
+    },
+    shortCircuit: {
+      calculationCase: "maximum",
+      faultType: "threePhase",
+      computePeak: request.shortCircuitOptions.computePeak,
+      computeThermal: request.shortCircuitOptions.computeThermal,
+      voltageFactor: 1,
+    },
+    buses: request.solverInput.buses.map((b) => ({
+      internalId: b.internalId,
+      voltageLevelKv: b.vnKv,
+      ikssKa: 12.34,
+      ipKa: 31.5,
+      ithKa: 13.0,
+      skssMva: 141.1,
+      status: "valid" as const,
+    })),
+    issues: [],
+  };
+}
+
 class StubTransport implements SidecarTransport {
   async health(): Promise<SidecarHealth> {
     return {
@@ -86,9 +122,10 @@ class StubTransport implements SidecarTransport {
   async runLoadFlow(input: SolverInput): Promise<SolverResult> {
     return fakeSolverResult(input);
   }
-  async runShortCircuit(): Promise<never> {
-    // Stage 3 PR #3 — calculationStore tests do not exercise Short Circuit.
-    throw new Error("StubTransport.runShortCircuit not implemented for calculationStore tests");
+  async runShortCircuit(
+    request: ShortCircuitRequest,
+  ): Promise<ShortCircuitSidecarResponse> {
+    return fakeShortCircuitResponse(request);
   }
 }
 
@@ -182,6 +219,100 @@ describe("CalculationStore — runtime-only guardrail", () => {
 
     // The serialized JSON before and after the run must be identical.
     expect(captured.serializedAfter).toBe(captured.serializedBefore);
+  });
+
+  it("retains a Short Circuit bundle under short_circuit_bundle and marks it stale on project edit (Stage 3 PR #5)", async () => {
+    const transport = new StubTransport();
+    interface ScCaptured {
+      hasScBundle: boolean;
+      scLifecycle: string;
+      hasShortCircuitRetention: boolean;
+      shortCircuitRetentionStaleAfterEdit: boolean;
+      serializedAfter: string | null;
+    }
+    const captured: ScCaptured = {
+      hasScBundle: false,
+      scLifecycle: "idle",
+      hasShortCircuitRetention: false,
+      shortCircuitRetentionStaleAfterEdit: false,
+      serializedAfter: null,
+    };
+
+    function ScHarness() {
+      const { state: project, dispatch: projectDispatch } = useProjectState();
+      const { state: calc, shortCircuit, runShortCircuit } = useCalculation();
+      useEffect(() => {
+        captured.hasScBundle = shortCircuit.bundle !== null;
+        captured.scLifecycle = shortCircuit.lifecycle;
+        const scKey = "short_circuit_bundle::SCN-NORMAL::_";
+        const rec = calc.retainedResults[scKey];
+        if (rec) {
+          captured.hasShortCircuitRetention = true;
+          if (rec.stale) {
+            captured.shortCircuitRetentionStaleAfterEdit = true;
+          }
+        }
+        if (shortCircuit.bundle !== null) {
+          captured.serializedAfter = serializeProjectFile(project.project);
+        }
+      }, [
+        calc.retainedResults,
+        shortCircuit.bundle,
+        shortCircuit.lifecycle,
+        project.project,
+      ]);
+      return (
+        <div>
+          <button
+            type="button"
+            data-testid="harness-run-sc"
+            onClick={() => void runShortCircuit()}
+          />
+          <button
+            type="button"
+            data-testid="harness-edit"
+            onClick={() =>
+              projectDispatch({ type: "addEquipment", kind: "bus", now: "2026-05-02T00:00:00Z" })
+            }
+          />
+        </div>
+      );
+    }
+
+    const { getByTestId } = render(
+      <ProjectProvider
+        initial={{ project: getDemoFixture(), selectedInternalId: null, isDirty: false }}
+      >
+        <CalculationProvider validation={VALID_SUMMARY} transport={transport}>
+          <ScHarness />
+        </CalculationProvider>
+      </ProjectProvider>,
+    );
+
+    await act(async () => {
+      (getByTestId("harness-run-sc") as HTMLButtonElement).click();
+    });
+    await waitFor(() => expect(captured.hasScBundle).toBe(true));
+    expect(captured.scLifecycle === "succeeded" || captured.scLifecycle === "warning").toBe(true);
+    expect(captured.hasShortCircuitRetention).toBe(true);
+
+    // Project file is unchanged: no calculationResults growth, no
+    // calculationSnapshots populated.
+    expect(captured.serializedAfter).not.toBeNull();
+    const parsed = JSON.parse(captured.serializedAfter!);
+    expect(parsed).not.toHaveProperty("calculationResults");
+    expect(parsed.calculationSnapshots).toEqual([]);
+
+    // Project edit must flip the retained SC record's stale flag
+    // (spec §8.2 retention rules; spec §8.2.1 documents the
+    // intentional asymmetry — retainedResults stale flag is the
+    // multi-module source of truth).
+    await act(async () => {
+      (getByTestId("harness-edit") as HTMLButtonElement).click();
+    });
+    await waitFor(() =>
+      expect(captured.shortCircuitRetentionStaleAfterEdit).toBe(true),
+    );
   });
 
   it("marks the runtime result as 'stale' after the project changes", async () => {

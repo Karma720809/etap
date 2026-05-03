@@ -1,38 +1,45 @@
 // Stage 2 PR #5 — Calculation status + run controls.
+// Stage 3 PR #5 — Short Circuit module wiring.
 //
-// This panel is now the user's entry point to the Stage 2 calculation
-// flow. It surfaces:
+// This panel is the user's entry point to the calculation flow. It
+// surfaces:
 //
-//   - Module status for Load Flow + Voltage Drop (driven by the
-//     runtime CalculationStore, no more "not_implemented" placeholder).
+//   - Module status for Load Flow + Voltage Drop + Short Circuit
+//     (driven by the runtime CalculationStore — the LF / VD pair
+//     reads from the LF-narrow `state.bundle` slot, the SC module
+//     reads from the parallel React-side `shortCircuit` slot per
+//     spec §8.2.1).
 //   - A "Run Load Flow / Voltage Drop" button that builds the
 //     AppNetwork from the current project, calls the solver adapter
 //     orchestrator, and stores the resulting bundle in runtime state.
-//     Disabled when the validation summary contains errors or when no
-//     solver transport is configured.
-//   - The structured issue list from the latest bundle (Load Flow
-//     issues + Voltage Drop issues), plus any blocking validation
-//     errors so the user can see exactly why the Run button is locked
-//     down.
-//   - The result tables (Load Flow buses / branches / Voltage Drop)
-//     when a successful run has produced a result. We never render
-//     numeric placeholders before a real run — that was the AC18
-//     guardrail in Stage 1 and PR #5 must keep it.
+//   - A separate "Run Short Circuit" button that fires the Stage 3
+//     orchestrator. The two buttons are deliberately separate so the
+//     user can tell which solver run is being kicked off (spec §9.4
+//     Stage 3 PR #5 Run-button contract).
+//   - The structured issue list from the latest LF/VD bundle and the
+//     latest SC result.
+//   - The Load Flow / Voltage Drop result tables and the Short
+//     Circuit result table when each module has produced a real
+//     result. We never render numeric placeholders before a real
+//     run — that was the AC18 guardrail in Stage 1 and PR #5 must
+//     keep it.
 //
-// Short Circuit / Cable Sizing / Report Export remain Stage 3+
-// territory. They appear in the module list as `not_implemented` so
-// the UI keeps visibility on what is and isn't shipped, but their
-// rows have no Run buttons.
+// Cable Sizing / Report Export remain Stage 4+ territory. They appear
+// in the module list as `not_implemented` so the UI keeps visibility
+// on what is and isn't shipped.
 
 import { useMemo } from "react";
 import type { ValidationSummary } from "@power-system-study/schemas";
 import type {
   LoadFlowIssue,
+  ShortCircuitIssue,
+  ShortCircuitResult,
   VoltageDropIssue,
 } from "@power-system-study/solver-adapter";
 
 import { useCalculation } from "../state/calculationStore.js";
 import { ResultTables } from "./ResultTables.js";
+import { ShortCircuitResultTable } from "./ShortCircuitResultTable.js";
 
 type StageModuleId = "loadFlow" | "voltageDrop" | "shortCircuit" | "cableSizing" | "report";
 
@@ -45,7 +52,7 @@ type ModuleDescriptor = {
 const STAGE_MODULES: ModuleDescriptor[] = [
   { id: "loadFlow", label: "Load Flow", futureStage: null },
   { id: "voltageDrop", label: "Voltage Drop", futureStage: null },
-  { id: "shortCircuit", label: "Short Circuit", futureStage: "Stage 3" },
+  { id: "shortCircuit", label: "Short Circuit", futureStage: null },
   { id: "cableSizing", label: "Cable Sizing", futureStage: "Stage 4" },
   { id: "report", label: "Report Export", futureStage: "Stage 5" },
 ];
@@ -123,21 +130,33 @@ export interface CalculationStatusPanelProps {
 }
 
 export function CalculationStatusPanel({ validation }: CalculationStatusPanelProps) {
-  const { state, canRun, disabledReason, runCalculation } = useCalculation();
+  const {
+    state,
+    shortCircuit,
+    canRun,
+    disabledReason,
+    canRunShortCircuit,
+    shortCircuitDisabledReason,
+    runCalculation,
+    runShortCircuit,
+  } = useCalculation();
 
   const errorIssues = useMemo(
     () => validation.issues.filter((i) => i.severity === "error"),
     [validation.issues],
   );
+  const hasValidationErrors = errorIssues.length > 0;
 
   const moduleStatuses = useMemo(() => {
-    const lfStatus = computeModuleStatus("loadFlow", state, errorIssues.length > 0);
-    const vdStatus = computeModuleStatus("voltageDrop", state, errorIssues.length > 0);
-    return { loadFlow: lfStatus, voltageDrop: vdStatus };
-  }, [state, errorIssues.length]);
+    const lfStatus = computeLoadFlowModuleStatus("loadFlow", state, hasValidationErrors);
+    const vdStatus = computeLoadFlowModuleStatus("voltageDrop", state, hasValidationErrors);
+    const scStatus = computeShortCircuitModuleStatus(shortCircuit, hasValidationErrors);
+    return { loadFlow: lfStatus, voltageDrop: vdStatus, shortCircuit: scStatus };
+  }, [state, shortCircuit, hasValidationErrors]);
 
   const lifecycle = state.lifecycle;
   const bundle = state.bundle;
+  const scResult = shortCircuit.bundle?.shortCircuit ?? null;
 
   return (
     <div style={styles.wrapper} data-testid="calculation-status-panel">
@@ -152,14 +171,39 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
         >
           {lifecycle === "running" ? "Running…" : "Run Load Flow / Voltage Drop"}
         </button>
+        <button
+          type="button"
+          style={styles.runButton(canRunShortCircuit)}
+          onClick={() => void runShortCircuit()}
+          disabled={!canRunShortCircuit}
+          aria-disabled={!canRunShortCircuit}
+          data-testid="calc-run-sc-button"
+        >
+          {shortCircuit.lifecycle === "running"
+            ? "Running Short Circuit…"
+            : "Run Short Circuit"}
+        </button>
         {lifecycle === "stale" ? (
           <span style={styles.staleBadge} data-testid="calc-stale-badge">
             Stale — re-run for latest inputs
           </span>
         ) : null}
+        {shortCircuit.lifecycle === "stale" ? (
+          <span style={styles.staleBadge} data-testid="calc-sc-stale-badge">
+            SC Stale — re-run for latest inputs
+          </span>
+        ) : null}
         {disabledReason ? (
           <span style={{ fontSize: 12, color: "#64748b" }} data-testid="calc-disabled-reason">
             {disabledReason}
+          </span>
+        ) : null}
+        {shortCircuitDisabledReason && shortCircuitDisabledReason !== disabledReason ? (
+          <span
+            style={{ fontSize: 12, color: "#64748b" }}
+            data-testid="calc-sc-disabled-reason"
+          >
+            {shortCircuitDisabledReason}
           </span>
         ) : null}
       </div>
@@ -170,6 +214,12 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
         </div>
       ) : null}
 
+      {shortCircuit.startError ? (
+        <div style={styles.notice("error")} data-testid="calc-sc-start-error">
+          {shortCircuit.startError}
+        </div>
+      ) : null}
+
       <ul style={styles.list}>
         {STAGE_MODULES.map((mod) => {
           const status =
@@ -177,7 +227,9 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
               ? moduleStatuses.loadFlow
               : mod.id === "voltageDrop"
                 ? moduleStatuses.voltageDrop
-                : "not_implemented";
+                : mod.id === "shortCircuit"
+                  ? moduleStatuses.shortCircuit
+                  : "not_implemented";
           return (
             <li key={mod.id} style={styles.item} data-testid={`calc-module-${mod.id}`}>
               <span style={styles.itemLabel}>{mod.label}</span>
@@ -218,12 +270,16 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
         />
       ) : null}
 
+      {scResult ? <ShortCircuitIssues issues={scResult.issues} /> : null}
+
       {bundle ? (
         <ResultTables
           loadFlow={bundle.loadFlow}
           voltageDrop={bundle.voltageDrop}
         />
       ) : null}
+
+      <ShortCircuitResultTable result={scResult} />
     </div>
   );
 }
@@ -238,7 +294,7 @@ type StageModuleStatus =
   | "warning"
   | "stale";
 
-function computeModuleStatus(
+function computeLoadFlowModuleStatus(
   module: "loadFlow" | "voltageDrop",
   state: ReturnType<typeof useCalculation>["state"],
   hasValidationErrors: boolean,
@@ -254,7 +310,6 @@ function computeModuleStatus(
         ? "warning"
         : "failed";
   }
-  // voltageDrop
   if (state.bundle.voltageDrop === null) return "ready_to_run";
   return state.bundle.voltageDrop.status === "valid"
     ? "succeeded"
@@ -263,13 +318,34 @@ function computeModuleStatus(
       : "failed";
 }
 
+function computeShortCircuitModuleStatus(
+  shortCircuit: ReturnType<typeof useCalculation>["shortCircuit"],
+  hasValidationErrors: boolean,
+): StageModuleStatus {
+  if (hasValidationErrors) return "disabled_by_validation";
+  switch (shortCircuit.lifecycle) {
+    case "idle":
+      return "ready_to_run";
+    case "running":
+      return "running";
+    case "stale":
+      return "stale";
+    case "succeeded":
+      return "succeeded";
+    case "warning":
+      return "warning";
+    case "failed":
+      return "failed";
+  }
+}
+
 function describeModuleHint(
   mod: ModuleDescriptor,
   status: StageModuleStatus,
   errorCount: number,
 ): string {
   if (mod.futureStage) {
-    return `Not implemented in Stage 2 (planned for ${mod.futureStage}).`;
+    return `Not implemented in Stage 3 (planned for ${mod.futureStage}).`;
   }
   switch (status) {
     case "disabled_by_validation":
@@ -313,6 +389,28 @@ function BundleIssues({
         ))}
         {voltageDropIssues.map((issue, i) => (
           <li key={`vd-${issue.code}-${i}`} data-testid={`calc-issue-${issue.code}`}>
+            <code>{issue.code}</code> — {issue.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ShortCircuitIssues({
+  issues,
+}: {
+  issues: ShortCircuitResult["issues"];
+}) {
+  if (issues.length === 0) return null;
+  return (
+    <div style={styles.notice("warn")} data-testid="calc-sc-result-issues">
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        Short Circuit produced {issues.length} issue{issues.length === 1 ? "" : "s"}:
+      </div>
+      <ul style={styles.issueList}>
+        {issues.map((issue: ShortCircuitIssue, i: number) => (
+          <li key={`sc-${issue.code}-${i}`} data-testid={`calc-sc-issue-${issue.code}`}>
             <code>{issue.code}</code> — {issue.message}
           </li>
         ))}
