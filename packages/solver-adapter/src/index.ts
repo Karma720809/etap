@@ -103,3 +103,18 @@ export {
   type ShortCircuitWarningCode,
   type ShortCircuitWireIssue,
 } from "./shortCircuit.js";
+export {
+  normalizeShortCircuitResult,
+  type NormalizeShortCircuitResultArgs,
+  type ShortCircuitBusResult,
+  type ShortCircuitBusStatus,
+  type ShortCircuitIssue,
+  type ShortCircuitResult,
+  type ShortCircuitSolverMetadata,
+  type ShortCircuitStatus,
+} from "./shortCircuitResults.js";
+export {
+  runShortCircuitForAppNetwork,
+  type RunShortCircuitOptions,
+  type ShortCircuitRunBundle,
+} from "./shortCircuitRunner.js";

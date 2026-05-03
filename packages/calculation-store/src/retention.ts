@@ -1,16 +1,17 @@
 // Stage 2 PR #6 — Retention helpers.
+// Stage 3 PR #4 — widened to support `ShortCircuitRunBundle` retention.
 //
 // Pure helpers used by the reducer (and exposed for ad-hoc callers
 // such as integration tests). Nothing in here reaches for I/O or a
 // clock — timestamps are passed in by the caller.
 
 import type {
-  LoadFlowRunBundle,
   RuntimeCalculationSnapshot,
 } from "@power-system-study/solver-adapter";
 
 import type {
   CalculationModule,
+  RuntimeCalculationBundle,
   RuntimeCalculationRecord,
   RuntimeResultRetentionKey,
   RuntimeSnapshotRecord,
@@ -18,11 +19,20 @@ import type {
 } from "./types.js";
 
 /**
- * Default module identifier for the Load Flow + Voltage Drop bundle.
+ * Module identifier for the Load Flow + Voltage Drop bundle.
  * Both modules ride the same `LoadFlowRunBundle` (spec §S2-OQ-05) so
  * Stage 2 MVP retains the bundle as a unit under this single key.
  */
 export const LOAD_FLOW_BUNDLE_MODULE: CalculationModule = "load_flow_bundle";
+
+/**
+ * Module identifier for the Short Circuit bundle (Stage 3 PR #4 / spec
+ * §8.2). Distinct from the result-API discriminator
+ * `ShortCircuitResult.module = "shortCircuit"` (spec §7.2): both
+ * identify the Short Circuit calculation but live on different APIs.
+ */
+export const SHORT_CIRCUIT_BUNDLE_MODULE: CalculationModule =
+  "short_circuit_bundle";
 
 /**
  * Build the canonical retention key string used to index
@@ -40,14 +50,48 @@ export function retentionKeyToString(key: RuntimeResultRetentionKey): string {
 }
 
 /**
- * Derive the canonical retention key for a `LoadFlowRunBundle`. Stage
- * 2 MVP collapses the bundle to a single key (`load_flow_bundle`); a
- * later stage that runs LF and VD as separate operations can supply a
- * different module string per call.
+ * Type-narrowing predicate: a runtime bundle is a Short Circuit bundle
+ * when it carries the `shortCircuit` field (the discriminator on the
+ * runtime side; the calculation-store has no other way to tell two
+ * bundles apart without importing the `ShortCircuitRunBundle` type
+ * itself).
+ *
+ * This is the same shape `runShortCircuitForAppNetwork()` returns
+ * (spec §7.2). The reducer uses it to derive the retention key when
+ * the caller did not pass an explicit `module`.
+ */
+function isShortCircuitBundle(
+  bundle: RuntimeCalculationBundle,
+): bundle is Extract<RuntimeCalculationBundle, { shortCircuit: unknown }> {
+  return (
+    typeof (bundle as { shortCircuit?: unknown }).shortCircuit === "object" &&
+    (bundle as { shortCircuit?: unknown }).shortCircuit !== null
+  );
+}
+
+/**
+ * Default module for a runtime bundle. Stage 3 PR #4 derives the
+ * module from the bundle's discriminator so callers can omit the
+ * explicit `module` argument when retaining a freshly produced run.
+ */
+function defaultModuleForBundle(
+  bundle: RuntimeCalculationBundle,
+): CalculationModule {
+  return isShortCircuitBundle(bundle)
+    ? SHORT_CIRCUIT_BUNDLE_MODULE
+    : LOAD_FLOW_BUNDLE_MODULE;
+}
+
+/**
+ * Derive the canonical retention key for a runtime bundle. The
+ * `module` defaults to whichever module discriminator the bundle
+ * carries (`LoadFlowRunBundle` → `"load_flow_bundle"`,
+ * `ShortCircuitRunBundle` → `"short_circuit_bundle"`); callers may
+ * override it for sub-case retention in a later stage.
  */
 export function deriveRetentionKey(
-  bundle: LoadFlowRunBundle,
-  module: CalculationModule = LOAD_FLOW_BUNDLE_MODULE,
+  bundle: RuntimeCalculationBundle,
+  module: CalculationModule = defaultModuleForBundle(bundle),
   subCase: string | null = null,
 ): RuntimeResultRetentionKey {
   return {
@@ -63,7 +107,7 @@ export function deriveRetentionKey(
  * flips it later when the project changes.
  */
 export function makeCalculationRecord(args: {
-  bundle: LoadFlowRunBundle;
+  bundle: RuntimeCalculationBundle;
   build: RuntimeCalculationRecord["build"];
   recordedAt: string;
   module?: CalculationModule;
@@ -71,7 +115,7 @@ export function makeCalculationRecord(args: {
 }): RuntimeCalculationRecord {
   const key = deriveRetentionKey(
     args.bundle,
-    args.module ?? LOAD_FLOW_BUNDLE_MODULE,
+    args.module ?? defaultModuleForBundle(args.bundle),
     args.subCase ?? null,
   );
   return {

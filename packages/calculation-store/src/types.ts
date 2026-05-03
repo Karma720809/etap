@@ -27,6 +27,7 @@ import type { NetworkBuildResult } from "@power-system-study/network-model";
 import type {
   LoadFlowRunBundle,
   RuntimeCalculationSnapshot,
+  ShortCircuitRunBundle,
 } from "@power-system-study/solver-adapter";
 
 /**
@@ -43,15 +44,39 @@ export type CalculationLifecycle =
   | "stale";
 
 /**
- * Canonical module identifier for retention. Stage 2 MVP only ships
- * the Load Flow + Voltage Drop bundle — both modules ride the same
- * `LoadFlowRunBundle` and are retained as a unit under
- * `"load_flow_bundle"`. Future stages (Short Circuit, Cable Sizing,
- * report export) will widen this union when they actually land; the
- * Stage 2 surface stays narrow on purpose so unsupported module
- * literals cannot reach this package's API.
+ * Canonical module identifier for retention. Stage 2 ships the Load
+ * Flow + Voltage Drop bundle under `"load_flow_bundle"`; Stage 3 PR #4
+ * widens the union to include `"short_circuit_bundle"` for the
+ * `ShortCircuitRunBundle` retention slot (spec §8.2). Each value
+ * pairs with a single bundle shape on
+ * `RuntimeCalculationRecord.bundle`:
+ *   - `"load_flow_bundle"`   ↔ `LoadFlowRunBundle`
+ *   - `"short_circuit_bundle"` ↔ `ShortCircuitRunBundle`
+ *
+ * Note: `ShortCircuitResult.module = "shortCircuit"` (the result-API
+ * field) is **distinct** from this retention key; both identify the
+ * Short Circuit calculation but live on different APIs (spec §7.2).
+ *
+ * Future stages (Cable Sizing, report export) will widen this union
+ * further when they actually land; the surface stays narrow on
+ * purpose so unsupported module literals cannot reach this package's
+ * API.
  */
-export type CalculationModule = "load_flow_bundle";
+export type CalculationModule =
+  | "load_flow_bundle"
+  | "short_circuit_bundle";
+
+/**
+ * Discriminated union of runtime bundles supported by the retention
+ * layer (spec §8.2). The retention key's `module` field is the
+ * discriminator: Load Flow records carry a `LoadFlowRunBundle`, Short
+ * Circuit records carry a `ShortCircuitRunBundle`. Disk persistence
+ * remains deferred (S2-FU-07 / S3-FU-10); this union is purely an
+ * in-memory shape.
+ */
+export type RuntimeCalculationBundle =
+  | LoadFlowRunBundle
+  | ShortCircuitRunBundle;
 
 /**
  * Retention key per spec §10.5: latest successful result is kept per
@@ -69,15 +94,21 @@ export interface RuntimeResultRetentionKey {
 }
 
 /**
- * Retained successful run. The bundle owns the LF result, the derived
- * VD result, and the runtime snapshot. The build is held alongside so
- * the UI can surface E-NET-* readiness diagnostics from the same run
- * without rebuilding the AppNetwork.
+ * Retained successful run. The bundle owns its module-specific result
+ * (Load Flow + derived Voltage Drop, or Short Circuit) plus the
+ * runtime snapshot. The build is held alongside so the UI can surface
+ * E-NET-* readiness diagnostics from the same run without rebuilding
+ * the AppNetwork.
+ *
+ * Stage 3 PR #4 widens `bundle` to a discriminated union
+ * (`LoadFlowRunBundle | ShortCircuitRunBundle`) so the same record
+ * shape can hold either module's runtime bundle. The retention key's
+ * `module` field discriminates the union (spec §8.2 / S3-OQ-10).
  */
 export interface RuntimeCalculationRecord {
   /** Canonicalized retention key the record was stored under. */
   key: RuntimeResultRetentionKey;
-  bundle: LoadFlowRunBundle;
+  bundle: RuntimeCalculationBundle;
   /** Network build that produced the AppNetwork passed to the solver. */
   build: NetworkBuildResult | null;
   /** ISO timestamp when the record was retained. */
@@ -133,7 +164,15 @@ export interface RuntimeSnapshotRecord {
  */
 export interface CalculationStoreState {
   lifecycle: CalculationLifecycle;
-  /** Latest active LoadFlowRunBundle (success or failed-loadFlow). */
+  /**
+   * Latest active Load Flow + Voltage Drop bundle (success or failed).
+   * Stage 3 PR #4 keeps this slot narrow so the existing Stage 2 UI
+   * (CalculationStatusPanel, DiagramCanvas) can keep reading
+   * `bundle.loadFlow` / `bundle.voltageDrop` directly without
+   * narrowing. Short Circuit retention still works through
+   * `retainedResults`, which is the union-typed slot — the active
+   * Short Circuit slot lands when Stage 3 PR #5 wires up the UI.
+   */
   bundle: LoadFlowRunBundle | null;
   /** Network build for the active bundle. */
   build: NetworkBuildResult | null;

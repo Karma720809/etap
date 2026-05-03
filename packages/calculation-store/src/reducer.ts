@@ -1,16 +1,18 @@
 // Stage 2 PR #6 — Calculation store reducer.
+// Stage 3 PR #4 — widened to handle `ShortCircuitRunBundle` retention
+// alongside the existing `LoadFlowRunBundle`.
 //
-// Pure reducer that owns the calculation lifecycle plus the PR #6
-// retention rules (latest successful per key, latest failed snapshot
-// for audit, stale flip on project edit). The reducer is React-free
-// — `apps/web` wraps it in `useReducer`, but a CLI / desktop / test
-// harness can drive it directly.
+// Pure reducer that owns the calculation lifecycle plus the retention
+// rules (latest successful per key, latest failed snapshot for audit,
+// stale flip on project edit). The reducer is React-free — `apps/web`
+// wraps it in `useReducer`, but a CLI / desktop / test harness can
+// drive it directly.
 //
 // Design choices:
 //   - Action vocabulary follows the spec §10.5 narration:
 //       runStarted   — solver call about to fire
-//       runSucceeded — bundle returned, loadFlow.status !== "failed"
-//       runFailed    — pre-bundle error OR loadFlow.status === "failed"
+//       runSucceeded — bundle returned, top-level status !== "failed"
+//       runFailed    — pre-bundle error OR bundle status === "failed"
 //       markStale    — project edit invalidates the latest result
 //       clearResults — user discards retained state
 //   - Every action carries `at` so the reducer never reads a clock.
@@ -18,10 +20,11 @@
 //     `new Date().toISOString()`.
 //   - `runFailed` accepts an optional bundle/build/snapshot trio so
 //     the orchestrator can hand over the snapshot from a failed
-//     `LoadFlowRunBundle` (loadFlow.status === "failed" still ships a
-//     real snapshot per spec §10.2). When neither is supplied — the
-//     pre-bundle "no transport" path — only the active lifecycle is
-//     updated; nothing is retained.
+//     bundle (failed runs still ship a real snapshot per spec §10.2).
+//     When neither is supplied — the pre-bundle "no transport" path —
+//     only the active lifecycle is updated; nothing is retained.
+//   - The bundle's discriminator (`loadFlow` vs `shortCircuit`) drives
+//     both the failed-status check and the retention key derivation.
 
 import type { NetworkBuildResult } from "@power-system-study/network-model";
 import type {
@@ -37,14 +40,30 @@ import {
 } from "./retention.js";
 import type {
   CalculationStoreState,
+  RuntimeCalculationBundle,
   RuntimeSnapshotRetentionReason,
 } from "./types.js";
+
+/**
+ * Narrowing helper: the active store slot
+ * `CalculationStoreState.bundle` keeps the Stage 2 narrow type
+ * (`LoadFlowRunBundle | null`) so the existing UI does not have to
+ * narrow on every read. Stage 3 Short Circuit bundles flow through
+ * the action vocabulary into `retainedResults` (the union-typed slot)
+ * but do not occupy this active slot until Stage 3 PR #5 wires up
+ * dedicated SC UI.
+ */
+function isLoadFlowBundle(
+  bundle: RuntimeCalculationBundle,
+): bundle is LoadFlowRunBundle {
+  return "loadFlow" in bundle;
+}
 
 export type CalculationAction =
   | { type: "runStarted"; at: string }
   | {
       type: "runSucceeded";
-      bundle: LoadFlowRunBundle;
+      bundle: RuntimeCalculationBundle;
       build: NetworkBuildResult;
       at: string;
     }
@@ -54,11 +73,11 @@ export type CalculationAction =
       message: string;
       /**
        * Bundle returned by the orchestrator when the failure was a
-       * solver-level outcome (`loadFlow.status === "failed"`). Omitted
+       * solver-level outcome (top-level `status === "failed"`). Omitted
        * when the failure happened before the solver was called (e.g.,
        * no transport configured, network build invalid).
        */
-      bundle?: LoadFlowRunBundle;
+      bundle?: RuntimeCalculationBundle;
       build?: NetworkBuildResult | null;
       /**
        * Optional explicit snapshot override. Defaults to
@@ -86,18 +105,20 @@ export function calculationReducer(
       };
 
     case "runSucceeded": {
-      // Spec §10.2: the bundle's loadFlow may still report status
-      // "warning" — that's a successful run with non-fatal issues.
+      // Spec §10.2 / §7.5.3: a non-failed top-level status ("valid" /
+      // "warning") is a successful run with possibly non-fatal issues.
       // Only "failed" routes through `runFailed`.
-      const failed = action.bundle.loadFlow.status === "failed";
+      const failed = isBundleFailed(action.bundle);
       if (failed) {
         // Defensive: the orchestrator should dispatch `runFailed` for
-        // failed loadFlows. Treat a misrouted dispatch as a failure
+        // failed bundles. Treat a misrouted dispatch as a failure
         // rather than silently retain a failed bundle as a success.
         return applyRunFailed(state, {
           type: "runFailed",
           at: action.at,
-          message: firstErrorMessage(action.bundle) ?? "Load Flow failed.",
+          message:
+            firstErrorMessage(action.bundle) ??
+            defaultFailedMessage(action.bundle),
           bundle: action.bundle,
           build: action.build,
           reason: "runtime_failure",
@@ -108,11 +129,18 @@ export function calculationReducer(
         build: action.build,
         recordedAt: action.at,
       });
+      // The active `bundle` slot is narrow (LoadFlowRunBundle | null)
+      // so that the Stage 2 UI continues to read `bundle.loadFlow`
+      // without narrowing. Short Circuit successes are retained but do
+      // not displace the active LF slot — Stage 3 PR #5 will introduce
+      // the dedicated active slot for SC.
+      const activeSlot = isLoadFlowBundle(action.bundle)
+        ? { bundle: action.bundle, build: action.build }
+        : {};
       return {
         ...state,
         lifecycle: "succeeded",
-        bundle: action.bundle,
-        build: action.build,
+        ...activeSlot,
         lastRunAt: action.at,
         startError: null,
         retainedResults: retainResult(state.retainedResults, record),
@@ -164,14 +192,22 @@ function applyRunFailed(
       })
     : state.lastFailedSnapshot;
 
+  // Same narrow-slot rule as `runSucceeded`: only Load Flow bundles
+  // displace the Stage 2 active `bundle` slot. Failed Short Circuit
+  // bundles still land on `lastFailedSnapshot` for audit, but leave
+  // the active LF panel untouched.
+  const activeOverride =
+    action.bundle !== undefined && isLoadFlowBundle(action.bundle)
+      ? { bundle: action.bundle }
+      : {};
   return {
     ...state,
     lifecycle: "failed",
-    // When a failed bundle is supplied, surface it so the UI can show
-    // the structured failure issues instead of a blank result panel.
-    // Pre-bundle failures leave the previous bundle in place — the
-    // start-error string is the user-visible signal in that path.
-    ...(action.bundle !== undefined ? { bundle: action.bundle } : {}),
+    // When a failed Load Flow bundle is supplied, surface it so the UI
+    // can show the structured failure issues instead of a blank result
+    // panel. Pre-bundle failures leave the previous bundle in place —
+    // the start-error string is the user-visible signal in that path.
+    ...activeOverride,
     ...(action.build !== undefined ? { build: action.build } : {}),
     lastRunAt: action.at,
     startError: action.message,
@@ -179,11 +215,31 @@ function applyRunFailed(
   };
 }
 
-function firstErrorMessage(bundle: LoadFlowRunBundle): string | null {
-  for (const issue of bundle.loadFlow.issues) {
+/**
+ * Discriminator helper: read the top-level status off whichever
+ * runtime bundle was supplied. Mirrors the in-memory shapes returned
+ * by `runLoadFlowForAppNetwork()` and `runShortCircuitForAppNetwork()`
+ * — the calculation-store package itself does not import the bundle
+ * types directly to keep the dependency surface narrow.
+ */
+function isBundleFailed(bundle: RuntimeCalculationBundle): boolean {
+  if ("loadFlow" in bundle) {
+    return bundle.loadFlow.status === "failed";
+  }
+  return bundle.shortCircuit.status === "failed";
+}
+
+function firstErrorMessage(bundle: RuntimeCalculationBundle): string | null {
+  const issues =
+    "loadFlow" in bundle ? bundle.loadFlow.issues : bundle.shortCircuit.issues;
+  for (const issue of issues) {
     if (issue.severity === "error") {
       return `${issue.code}: ${issue.message}`;
     }
   }
   return null;
+}
+
+function defaultFailedMessage(bundle: RuntimeCalculationBundle): string {
+  return "loadFlow" in bundle ? "Load Flow failed." : "Short Circuit failed.";
 }
