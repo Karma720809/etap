@@ -172,6 +172,15 @@ export interface NormalizeShortCircuitResultArgs {
  *   - `unavailable` rows do NOT by themselves flip the top-level
  *     status (spec §7.3) — they reflect the `mode === "specific"`
  *     scoping decision, not a calculation failure.
+ *   - `mode === "all_buses"` completeness check: any AppNetwork bus
+ *     missing from the wire response yields a synthesized `E-SC-001`
+ *     issue. Top-level status becomes `"failed"`. Partial wire rows
+ *     still ship in `busResults` for diagnostic value.
+ *   - Unknown wire rows (wire `internalId` not in AppNetwork) are NOT
+ *     emitted as bus rows; a synthesized `E-SC-001` issue names the
+ *     unknown id and top-level status becomes `"failed"`. The result
+ *     type's `voltageLevelKv: number` invariant is preserved — no
+ *     `null → 0` substitution ever happens.
  */
 export function normalizeShortCircuitResult(
   args: NormalizeShortCircuitResultArgs,
@@ -201,8 +210,8 @@ export function normalizeShortCircuitResult(
   // No projection at all when the run failed before producing rows
   // (spec §7.2 — `busResults: []` only when the run failed before
   // any normalization could happen).
-  const busResults: ShortCircuitBusResult[] = wireFailed
-    ? []
+  const projection = wireFailed
+    ? { rows: [] as ShortCircuitBusResult[], syntheticIssues: [] as ShortCircuitIssue[] }
     : projectBusRows({
         appNetwork,
         request,
@@ -210,10 +219,21 @@ export function normalizeShortCircuitResult(
         busById,
       });
 
+  // Synthetic issues (response-completeness / unknown-bus diagnostics)
+  // are appended AFTER the wire issues so the wire vocabulary stays
+  // first when consumers iterate. They are still error-severity so the
+  // top-level status flips to `failed` per the fail-closed rule
+  // (spec §7.5.2 / §S3-OQ-02).
+  const allIssues: ShortCircuitIssue[] = [
+    ...issues,
+    ...projection.syntheticIssues,
+  ];
+  const busResults = projection.rows;
+
   const status = deriveTopLevelStatus({
     wireFailed,
     busResults,
-    issues,
+    issues: allIssues,
   });
 
   const metadata: ShortCircuitSolverMetadata = {
@@ -236,7 +256,7 @@ export function normalizeShortCircuitResult(
     calculationCase: response.shortCircuit.calculationCase,
     voltageFactor: response.shortCircuit.voltageFactor,
     busResults,
-    issues,
+    issues: allIssues,
     metadata,
     createdAt: args.createdAt,
   };
@@ -250,30 +270,51 @@ interface ProjectBusRowsArgs {
 }
 
 /**
- * Walk every in-scope AppNetwork bus and either project the
- * matching wire row or synthesize an `unavailable` row.
+ * Walk every in-scope AppNetwork bus and either project the matching
+ * wire row or synthesize an `unavailable` row, then validate the wire
+ * response's completeness against `request.mode`.
  *
- * Spec §7.5.2:
- *   - For `mode === "specific"`, every bus not present in the wire
- *     response yields an `unavailable` row.
- *   - For `mode === "all_buses"`, missing buses are also synthesized
- *     as `unavailable` (the discrepancy is reported via a top-level
- *     issue surfaced by the orchestrator if needed).
+ * Spec §7.5.2 — mode-aware semantics:
+ *   - `mode === "specific"`: AppNetwork buses missing from the wire
+ *     response are synthesized as `unavailable` rows (non-targeted
+ *     buses) without a top-level issue. Per spec §7.3, `unavailable`
+ *     rows do NOT flip the top-level status.
+ *   - `mode === "all_buses"`: every in-scope AppNetwork bus is
+ *     implicitly targeted. A missing wire row is a sidecar response
+ *     completeness mismatch — the orchestrator emits an `unavailable`
+ *     row for the missing bus AND a structured top-level `E-SC-001`
+ *     issue noting the discrepancy (spec §11.1 — "malformed sidecar
+ *     response" applies). The error severity flips the top-level
+ *     status to `"failed"` per the fail-closed rule (§S3-OQ-02), so
+ *     incomplete `all_buses` output is never reported as `"valid"`.
+ *
+ * Unknown wire bus rows (Blocker 2 fix):
+ *   - A wire row whose `internalId` is NOT in AppNetwork is a
+ *     sidecar/AppNetwork desync that the wire structural guard cannot
+ *     catch (the guard only validates shape). These rows are NOT
+ *     normalized into `busResults` — fabricating a row would either
+ *     require inventing `voltageLevelKv` (the result type is
+ *     `number`, not `number | null`) or substituting a fake `0`,
+ *     either of which violates the §S3-OQ-02 no-fake-numbers rule.
+ *   - Instead, a structured `E-SC-001` issue is emitted naming the
+ *     unknown `internalId` so the user can audit the desync, and the
+ *     top-level status flips to `"failed"`.
  */
-function projectBusRows(args: ProjectBusRowsArgs): ShortCircuitBusResult[] {
-  const { appNetwork, responseRowsById } = args;
-  const out: ShortCircuitBusResult[] = [];
+function projectBusRows(args: ProjectBusRowsArgs): {
+  rows: ShortCircuitBusResult[];
+  syntheticIssues: ShortCircuitIssue[];
+} {
+  const { appNetwork, request, responseRowsById } = args;
+  const rows: ShortCircuitBusResult[] = [];
+  const syntheticIssues: ShortCircuitIssue[] = [];
 
-  // Track which AppNetwork buses we've already emitted so that any
-  // unexpected wire row (a bus the response carries but AppNetwork
-  // does not) is preserved verbatim afterwards.
   const seen = new Set<string>();
 
   for (const bus of appNetwork.buses) {
     seen.add(bus.internalId);
     const wireRow = responseRowsById.get(bus.internalId);
     if (wireRow !== undefined) {
-      out.push({
+      rows.push({
         busInternalId: wireRow.internalId,
         tag: bus.tag,
         voltageLevelKv: bus.vnKv,
@@ -286,7 +327,8 @@ function projectBusRows(args: ProjectBusRowsArgs): ShortCircuitBusResult[] {
       });
       continue;
     }
-    out.push({
+    // Missing wire row for this AppNetwork bus.
+    rows.push({
       busInternalId: bus.internalId,
       tag: bus.tag,
       voltageLevelKv: bus.vnKv,
@@ -297,28 +339,33 @@ function projectBusRows(args: ProjectBusRowsArgs): ShortCircuitBusResult[] {
       status: "unavailable",
       issueCodes: [],
     });
+    if (request.mode === "all_buses") {
+      // Spec §7.5.2: in `all_buses` mode every bus is implicitly
+      // targeted. A missing row is a response completeness mismatch.
+      syntheticIssues.push({
+        code: "E-SC-001",
+        severity: "error",
+        message: `Sidecar response is incomplete: bus ${JSON.stringify(bus.internalId)} expected for mode='all_buses' but missing from response.`,
+        internalId: bus.internalId,
+      });
+    }
   }
 
-  // Defensive: a wire row that names a bus AppNetwork does not know
-  // about is a sidecar/AppNetwork desync. Preserve it as a `failed`
-  // row so the data is not silently dropped; the upstream wire guard
-  // already rejects malformed payloads, so this branch is rarely hit.
-  for (const [internalId, wireRow] of responseRowsById) {
+  // Unknown wire row (internalId not in AppNetwork). Do NOT fabricate
+  // a normal app bus row — `voltageLevelKv` cannot be invented and we
+  // must not substitute `0` for `null`. Surface the desync via a
+  // structured issue and drop the row.
+  for (const [internalId] of responseRowsById) {
     if (seen.has(internalId)) continue;
-    out.push({
-      busInternalId: internalId,
-      tag: internalId,
-      voltageLevelKv: wireRow.voltageLevelKv ?? 0,
-      ikssKa: wireRow.ikssKa,
-      ipKa: wireRow.ipKa,
-      ithKa: wireRow.ithKa,
-      skssMva: wireRow.skssMva,
-      status: mapBusRowStatus(wireRow.status),
-      issueCodes: wireRow.issueCodes ? [...wireRow.issueCodes] : [],
+    syntheticIssues.push({
+      code: "E-SC-001",
+      severity: "error",
+      message: `Sidecar response references unknown bus internalId ${JSON.stringify(internalId)} not present in AppNetwork.`,
+      internalId,
     });
   }
 
-  return out;
+  return { rows, syntheticIssues };
 }
 
 interface DeriveStatusArgs {

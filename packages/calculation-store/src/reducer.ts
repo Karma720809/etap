@@ -151,6 +151,20 @@ export function calculationReducer(
       return applyRunFailed(state, action);
 
     case "markStale": {
+      // Stage 3 PR #4 — intentional asymmetry between
+      // `state.lifecycle` and `retainedResults` staleness:
+      //
+      // The top-level `state.lifecycle` is tied to the LF-narrow active
+      // `state.bundle` slot. It only flips to `"stale"` when the active
+      // LF panel currently shows a result (i.e., `state.bundle !== null`).
+      // A short-circuit-only success leaves the active LF slot at
+      // `null` (Stage 3 PR #5 wires up the dedicated SC active slot),
+      // so `state.lifecycle` legitimately stays at `"succeeded"` after
+      // a project edit even though the retained SC record's stale flag
+      // flips. The retained-records flag is the source of truth for
+      // staleness in the multi-module retention world; the lifecycle
+      // is the LF-active-slot signal until PR #5 introduces a parallel
+      // SC lifecycle slot.
       const nextRetained = markAllRetainedStale(state.retainedResults);
       const lifecycleNeedsFlip =
         state.bundle !== null && state.lifecycle !== "stale";

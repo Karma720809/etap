@@ -672,6 +672,36 @@ describe("calculationReducer — short circuit retention (Stage 3 PR #4)", () =>
     expect(after2.lastFailedSnapshot?.reason).toBe("runtime_failure");
   });
 
+  it("SC-only success followed by markStale: retained record flips stale, lifecycle stays succeeded (LF-active-slot oriented)", () => {
+    // Stage 3 PR #4 documents the intentional asymmetry: the
+    // top-level `state.lifecycle` is wired to the LF-narrow active
+    // `state.bundle` slot. A SC-only success leaves the active slot
+    // null (PR #5 will introduce the dedicated SC active slot), so
+    // `markStale` flips the retained record's `stale` flag but the
+    // lifecycle legitimately stays at "succeeded". The retained-flag
+    // is the multi-module source of truth for staleness.
+    const sc = fakeShortCircuitBundle("SCN-A", "valid", "snap_sc");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: sc,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    // Sanity: the active LF slot stays null because the bundle is SC.
+    expect(after1.bundle).toBeNull();
+    expect(after1.lifecycle).toBe("succeeded");
+
+    const after2 = calculationReducer(after1, { type: "markStale" });
+    // Lifecycle stays "succeeded" — there is no active LF bundle to
+    // mark stale, and the lifecycle is currently LF-oriented.
+    expect(after2.lifecycle).toBe("succeeded");
+    // Retained SC record IS marked stale (the multi-module truth).
+    const scKey = retentionKeyToString(deriveRetentionKey(sc));
+    expect(after2.retainedResults[scKey]?.stale).toBe(true);
+    // Bundle ref still null — markStale did not invent an active slot.
+    expect(after2.bundle).toBeNull();
+  });
+
   it("dispatching runSucceeded with a failed SC bundle is rerouted to runFailed semantics", () => {
     const failed = fakeShortCircuitBundle("SCN-A", "failed", "snap_f");
     const next = calculationReducer(initialCalculationStoreState, {

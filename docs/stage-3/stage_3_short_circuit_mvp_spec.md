@@ -917,12 +917,55 @@ in-scope `AppNetwork.buses` entry and:
 
 When `request.mode === "all_buses"`, every bus is in the fault
 target set by definition, so the orchestrator should not need to
-synthesize any `unavailable` rows; if a sidecar response is missing a
+synthesize any `unavailable` rows. If a sidecar response IS missing a
 bus that was implied by `mode === "all_buses"` (e.g., the sidecar
-skipped it for an internal reason), the orchestrator still
-synthesizes an `unavailable` row plus a top-level `W-SC-*` /
-`E-SC-*` issue noting the discrepancy (the exact code is decided in
-Stage 3 PR #4 alongside the orchestrator implementation).
+skipped it for an internal reason), this is a sidecar response
+**completeness mismatch**. Stage 3 PR #4 closes the spec's "exact code"
+question as follows:
+
+- The orchestrator emits an `unavailable` row for the missing bus
+  (same shape as a `mode === "specific"` non-target row) so the result
+  table still has a slot for the bus.
+- The orchestrator appends a structured top-level `E-SC-001` issue
+  whose `internalId` names the missing bus. `E-SC-001` is reused
+  because the missing-row case is functionally a **malformed sidecar
+  response** (the sidecar accepted the request but did not honor its
+  contract for `mode === "all_buses"`).
+- The error severity flips the top-level `ShortCircuitResult.status`
+  to `"failed"` per the fail-closed rule (§S3-OQ-02). Top-level status
+  MUST NOT be `"valid"` when `all_buses` output is incomplete.
+- Partial wire rows are still emitted in `busResults` for diagnostic
+  value — this is the one explicit deviation from §7.2's "Empty only
+  when the run failed before any normalization could happen" comment;
+  the §7.5.2 completeness path is allowed to ship partial rows
+  alongside `status === "failed"` so the user can see which buses did
+  return data.
+
+Specific-mode missing rows do NOT raise a top-level issue: they are
+the expected scoping outcome of `mode === "specific"`.
+
+#### 7.5.2.1 Unknown wire bus rows
+
+A wire row whose `internalId` is **not** present in
+`AppNetwork.buses` is a sidecar / AppNetwork desync the structural
+guard (`isShortCircuitSidecarResponse`) cannot catch (the guard only
+validates shape). Stage 3 PR #4 handles these as follows:
+
+- The unknown wire row is **NOT** emitted as a `ShortCircuitBusResult`
+  entry. Fabricating a row would either require inventing
+  `voltageLevelKv` (the result type pins it as `number`, not
+  `number | null`) or substituting a default such as `0`, both of
+  which violate the §S3-OQ-02 no-fake-numbers rule.
+- The orchestrator appends a structured top-level `E-SC-001` issue
+  whose `internalId` names the unknown id.
+- Top-level status flips to `"failed"` for the same reason as the
+  completeness mismatch above.
+- **No `null → 0` substitution ever happens** for `voltageLevelKv`,
+  for any other numeric field, or anywhere else in normalization. The
+  result type's `voltageLevelKv: number` invariant is preserved
+  exclusively by sourcing it from `AppNetwork.buses[].vnKv` (which is
+  always a number) — the wire `voltageLevelKv` is consulted only for
+  audit and is never used as a fallback.
 
 #### 7.5.3 Top-level status mapping
 
@@ -1009,6 +1052,32 @@ Retention rules are unchanged from Stage 2:
 - Stale flag: a project edit that affects the AppNetwork flips the
   retained Short Circuit record's `stale` flag. **No auto-recompute.**
   The user explicitly re-runs.
+
+#### 8.2.1 Active-slot lifecycle is LF-oriented until Stage 3 PR #5
+
+Stage 3 PR #4 keeps the calculation-store's active `state.bundle`
+slot narrow (`LoadFlowRunBundle | null`) so the existing Stage 2 UI
+(CalculationStatusPanel, DiagramCanvas) can keep reading
+`bundle.loadFlow` / `bundle.voltageDrop` without narrowing. Short
+Circuit successes flow through `runSucceeded` and are written into
+`retainedResults` under `"short_circuit_bundle"`, but they do **not**
+displace the active LF slot.
+
+This produces an intentional asymmetry that lasts until Stage 3 PR #5
+introduces a dedicated active SC slot:
+
+- A `markStale` dispatch after a SC-only success **flips the retained
+  record's `stale` flag** (the multi-module source of truth for
+  staleness).
+- A `markStale` dispatch after a SC-only success **does not** flip
+  `state.lifecycle` to `"stale"`, because `state.lifecycle` is wired
+  to the LF-narrow active slot and that slot is `null`. Lifecycle
+  remains `"succeeded"` (or `"idle"` if no LF run has happened).
+
+Consumers that need a stale signal across all modules MUST iterate
+`retainedResults[*].stale`; reading `state.lifecycle` alone is the
+LF-active-slot signal until Stage 3 PR #5 wires up the parallel SC
+lifecycle slot.
 
 ### 8.3 No project file serialization
 
