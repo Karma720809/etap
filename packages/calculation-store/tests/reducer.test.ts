@@ -31,6 +31,8 @@ import {
   type LoadFlowResult,
   type LoadFlowRunBundle,
   type RuntimeCalculationSnapshot,
+  type ShortCircuitResult,
+  type ShortCircuitRunBundle,
   type SolverInput,
   type SolverOptions,
   type VoltageDropResult,
@@ -42,6 +44,7 @@ import {
   retentionKeyToString,
   deriveRetentionKey,
   markAllRetainedStale,
+  SHORT_CIRCUIT_BUNDLE_MODULE,
   type CalculationStoreState,
 } from "../src/index.js";
 
@@ -187,6 +190,82 @@ function fakeBundle(
     snapshot: fakeSnapshot(scenarioId, snapshotId),
     solverInput: emptySolverInput(scenarioId),
     voltageDrop: status === "failed" ? null : fakeVoltageDrop(scenarioId),
+  };
+}
+
+function fakeShortCircuitResult(
+  scenarioId: string | null,
+  status: "valid" | "warning" | "failed",
+  resultId = "scr_x",
+): ShortCircuitResult {
+  return {
+    resultId,
+    runtimeSnapshotId: "snap_x",
+    scenarioId,
+    module: "shortCircuit",
+    status,
+    faultType: "threePhase",
+    calculationCase: "maximum",
+    voltageFactor: 1,
+    busResults:
+      status === "failed"
+        ? []
+        : [
+            {
+              busInternalId: "eq_bus_mv",
+              tag: "BUS-MV",
+              voltageLevelKv: 6.6,
+              ikssKa: 12.34,
+              ipKa: 31.5,
+              ithKa: 13,
+              skssMva: 141.1,
+              status: "ok",
+              issueCodes: [],
+            },
+          ],
+    issues:
+      status === "failed"
+        ? [
+            {
+              code: "E-SC-001",
+              severity: "error",
+              message: "solver sidecar transport failure: simulated",
+            },
+          ]
+        : [],
+    metadata: {
+      solverName: "pandapower",
+      solverVersion: "fake-2.14.10",
+      adapterVersion: "0.0.0-test",
+      solverOptions: { ...DEFAULT_SOLVER_OPTIONS },
+      executedAt: NOW,
+      inputHash: null,
+      networkHash: null,
+    },
+    createdAt: NOW,
+  };
+}
+
+function fakeShortCircuitBundle(
+  scenarioId: string | null,
+  status: "valid" | "warning" | "failed" = "valid",
+  snapshotId = "snap_sc",
+): ShortCircuitRunBundle {
+  return {
+    shortCircuit: fakeShortCircuitResult(scenarioId, status),
+    snapshot: fakeSnapshot(scenarioId, snapshotId),
+    solverInput: emptySolverInput(scenarioId),
+    request: {
+      solverInput: emptySolverInput(scenarioId),
+      mode: "all_buses",
+      faultTargets: [],
+      shortCircuitOptions: {
+        faultType: "threePhase",
+        calculationCase: "maximum",
+        computePeak: true,
+        computeThermal: true,
+      },
+    },
   };
 }
 
@@ -488,6 +567,156 @@ describe("calculationReducer — clearResults", () => {
     expect(cleared.startError).toBeNull();
     expect(cleared.retainedResults).toEqual({});
     expect(cleared.lastFailedSnapshot).toBeNull();
+  });
+});
+
+describe("calculationReducer — short circuit retention (Stage 3 PR #4)", () => {
+  it("retains a successful Short Circuit bundle under the short_circuit_bundle key", () => {
+    const bundle = fakeShortCircuitBundle("SCN-A", "valid");
+    const build = fakeBuild("SCN-A");
+    const next = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle,
+      build,
+      at: NOW,
+    });
+    expect(next.lifecycle).toBe("succeeded");
+    const key = retentionKeyToString(deriveRetentionKey(bundle));
+    expect(key).toBe("short_circuit_bundle::SCN-A::_");
+    expect(next.retainedResults[key]).toBeDefined();
+    expect(next.retainedResults[key]?.bundle).toBe(bundle);
+    expect(next.retainedResults[key]?.key.module).toBe(SHORT_CIRCUIT_BUNDLE_MODULE);
+    expect(next.retainedResults[key]?.stale).toBe(false);
+    // The active LF slot is unchanged — Short Circuit retention does
+    // not displace the Stage 2 active bundle (Stage 3 PR #5 wires up
+    // the dedicated active SC slot).
+    expect(next.bundle).toBeNull();
+  });
+
+  it("retains LF and SC bundles side by side under distinct keys", () => {
+    const lf = fakeBundle("SCN-A", "valid", "snap_lf");
+    const sc = fakeShortCircuitBundle("SCN-A", "valid", "snap_sc");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: lf,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    const after2 = calculationReducer(after1, {
+      type: "runSucceeded",
+      bundle: sc,
+      build: fakeBuild("SCN-A"),
+      at: "2026-05-02T01:00:00Z",
+    });
+    const lfKey = retentionKeyToString(deriveRetentionKey(lf));
+    const scKey = retentionKeyToString(deriveRetentionKey(sc));
+    expect(lfKey).toBe("load_flow_bundle::SCN-A::_");
+    expect(scKey).toBe("short_circuit_bundle::SCN-A::_");
+    expect(Object.keys(after2.retainedResults).sort()).toEqual([lfKey, scKey].sort());
+    expect(after2.retainedResults[lfKey]?.bundle).toBe(lf);
+    expect(after2.retainedResults[scKey]?.bundle).toBe(sc);
+    // The active LF slot still points at the Load Flow bundle.
+    expect(after2.bundle).toBe(lf);
+  });
+
+  it("markStale flips the stale flag on both LF and SC retained records", () => {
+    const lf = fakeBundle("SCN-A", "valid", "snap_lf");
+    const sc = fakeShortCircuitBundle("SCN-A", "valid", "snap_sc");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: lf,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    const after2 = calculationReducer(after1, {
+      type: "runSucceeded",
+      bundle: sc,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    const after3 = calculationReducer(after2, { type: "markStale" });
+    expect(after3.lifecycle).toBe("stale");
+    for (const rec of Object.values(after3.retainedResults)) {
+      expect(rec.stale).toBe(true);
+    }
+    expect(Object.keys(after3.retainedResults)).toHaveLength(2);
+  });
+
+  it("a failed SC bundle retains the snapshot but does not delete the prior successful SC record", () => {
+    const success = fakeShortCircuitBundle("SCN-A", "valid", "snap_ok");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: success,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    const successKey = retentionKeyToString(deriveRetentionKey(success));
+    expect(after1.retainedResults[successKey]?.bundle).toBe(success);
+    expect(after1.lastFailedSnapshot).toBeNull();
+
+    const failed = fakeShortCircuitBundle("SCN-A", "failed", "snap_f");
+    const after2 = calculationReducer(after1, {
+      type: "runFailed",
+      at: "2026-05-02T03:00:00Z",
+      message: "E-SC-001: solver sidecar transport failure",
+      bundle: failed,
+      build: fakeBuild("SCN-A"),
+      reason: "runtime_failure",
+    });
+    expect(after2.lifecycle).toBe("failed");
+    // Prior successful SC retention is preserved.
+    expect(after2.retainedResults[successKey]?.bundle).toBe(success);
+    expect(after2.retainedResults[successKey]?.stale).toBe(false);
+    // The failed snapshot lands on `lastFailedSnapshot`.
+    expect(after2.lastFailedSnapshot?.snapshot).toBe(failed.snapshot);
+    expect(after2.lastFailedSnapshot?.reason).toBe("runtime_failure");
+  });
+
+  it("SC-only success followed by markStale: retained record flips stale, lifecycle stays succeeded (LF-active-slot oriented)", () => {
+    // Stage 3 PR #4 documents the intentional asymmetry: the
+    // top-level `state.lifecycle` is wired to the LF-narrow active
+    // `state.bundle` slot. A SC-only success leaves the active slot
+    // null (PR #5 will introduce the dedicated SC active slot), so
+    // `markStale` flips the retained record's `stale` flag but the
+    // lifecycle legitimately stays at "succeeded". The retained-flag
+    // is the multi-module source of truth for staleness.
+    const sc = fakeShortCircuitBundle("SCN-A", "valid", "snap_sc");
+    const after1 = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: sc,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    // Sanity: the active LF slot stays null because the bundle is SC.
+    expect(after1.bundle).toBeNull();
+    expect(after1.lifecycle).toBe("succeeded");
+
+    const after2 = calculationReducer(after1, { type: "markStale" });
+    // Lifecycle stays "succeeded" — there is no active LF bundle to
+    // mark stale, and the lifecycle is currently LF-oriented.
+    expect(after2.lifecycle).toBe("succeeded");
+    // Retained SC record IS marked stale (the multi-module truth).
+    const scKey = retentionKeyToString(deriveRetentionKey(sc));
+    expect(after2.retainedResults[scKey]?.stale).toBe(true);
+    // Bundle ref still null — markStale did not invent an active slot.
+    expect(after2.bundle).toBeNull();
+  });
+
+  it("dispatching runSucceeded with a failed SC bundle is rerouted to runFailed semantics", () => {
+    const failed = fakeShortCircuitBundle("SCN-A", "failed", "snap_f");
+    const next = calculationReducer(initialCalculationStoreState, {
+      type: "runSucceeded",
+      bundle: failed,
+      build: fakeBuild("SCN-A"),
+      at: NOW,
+    });
+    expect(next.lifecycle).toBe("failed");
+    expect(next.retainedResults).toEqual({});
+    expect(next.lastFailedSnapshot?.snapshot).toBe(failed.snapshot);
+    expect(next.lastFailedSnapshot?.reason).toBe("runtime_failure");
+    expect(next.lastFailedSnapshot?.message).toBe(
+      "E-SC-001: solver sidecar transport failure: simulated",
+    );
   });
 });
 

@@ -821,27 +821,31 @@ describe("isShortCircuitSidecarResponse — strict structural validation", () =>
 });
 
 // ---------------------------------------------------------------------------
-// Out-of-scope guardrails — PR #2 must not reach into project file or PR #4
-// surfaces.
+// Stage 3 PR #4 graduation — guardrails updated.
+//
+// PR #2 originally enforced that the app-normalized result model and
+// orchestrator were NOT exported. PR #4 ships those surfaces (spec
+// §7.2 / §7.5 / §13 PR #4) so the original "must-not-export" guardrail
+// is replaced with a positive surface assertion. Out-of-scope checks
+// that remain valid post-PR-#4 (no transport-level run on the public
+// surface, no project-file fields on the request) are kept.
 // ---------------------------------------------------------------------------
 
-describe("Stage 3 PR #2 guardrails", () => {
-  it("does not export an app-normalized ShortCircuitResult / ShortCircuitBusResult / ShortCircuitRunBundle", async () => {
-    // Boundary check: PR #2 only ships wire-level types. The app-
-    // normalized result model and the runtime bundle land in PR #4.
-    // Importing them here must fail at the module level.
+describe("Stage 3 PR #4 graduation — public surface", () => {
+  it("exports the app-normalized ShortCircuit result model and orchestrator", async () => {
     const adapter = (await import("../src/index.js")) as unknown as Record<
       string,
       unknown
     >;
-    expect(adapter).not.toHaveProperty("ShortCircuitResult");
-    expect(adapter).not.toHaveProperty("ShortCircuitBusResult");
-    expect(adapter).not.toHaveProperty("ShortCircuitRunBundle");
-    expect(adapter).not.toHaveProperty("normalizeShortCircuitResult");
-    expect(adapter).not.toHaveProperty("runShortCircuitForAppNetwork");
+    expect(adapter).toHaveProperty("normalizeShortCircuitResult");
+    expect(adapter).toHaveProperty("runShortCircuitForAppNetwork");
   });
 
-  it("does not introduce any sidecar-execution call on the public surface", async () => {
+  it("does not introduce a transport-level sidecar-execution call on the public surface", async () => {
+    // The transport methods (`runShortCircuit`, `runLoadFlow`) live on
+    // the `SidecarTransport` interface and are not re-exported from
+    // the package index — only the orchestrator
+    // (`runShortCircuitForAppNetwork`) is the public entry point.
     const adapter = (await import("../src/index.js")) as unknown as Record<
       string,
       unknown

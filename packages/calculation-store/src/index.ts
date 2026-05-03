@@ -26,6 +26,7 @@ export {
   type CalculationLifecycle,
   type CalculationModule,
   type CalculationStoreState,
+  type RuntimeCalculationBundle,
   type RuntimeCalculationRecord,
   type RuntimeResultRetentionKey,
   type RuntimeSnapshotRecord,
@@ -39,6 +40,7 @@ export {
 
 export {
   LOAD_FLOW_BUNDLE_MODULE,
+  SHORT_CIRCUIT_BUNDLE_MODULE,
   deriveRetentionKey,
   makeCalculationRecord,
   makeFailedSnapshotRecord,
