@@ -2,19 +2,27 @@
 //
 // Renders the runtime `ShortCircuitResult` per spec §9.2. Rows are
 // keyed by `busInternalId`, displaying `tag`, `voltageLevelKv`,
-// `Ik''`, `ip`, `Ith`, `Sk''`, and a per-row status badge.
+// `Ik''`, `ip`, `Ith`, `Sk''`, a per-row status badge, and the
+// per-row `issueCodes` list (E-SC-* / W-SC-*). PR #16 review fix:
+// row-level issue codes were previously invisible — a completed run
+// could carry per-row warning/error codes with no top-level
+// `result.issues`, hiding diagnostic context. The Issues column
+// surfaces them inline on every row.
 //
 // Guardrails (spec §S3-OQ-02 / §9.5):
 //   - The table renders only when a real `ShortCircuitResult` exists.
 //   - Null numeric cells render as an explicit em dash, never `0`.
 //   - Failed / unavailable rows are visually distinct from `ok` rows
 //     via the status badge palette and an explicit empty-cell pattern.
-//   - Test ids namespace as `result-sc-bus-<id>-status` to avoid
-//     collision with the Stage 2 Load Flow `result-bus-<id>-status`
-//     pattern (spec §9.2).
+//   - Empty `issueCodes` renders as an em dash — never as a fake
+//     placeholder code.
+//   - Test ids namespace as `result-sc-bus-<id>-status` /
+//     `result-sc-bus-<id>-issues` to avoid collision with the Stage 2
+//     Load Flow `result-bus-<id>-status` pattern (spec §9.2).
 
 import type {
   ShortCircuitBusResult,
+  ShortCircuitIssueCode,
   ShortCircuitResult,
 } from "@power-system-study/solver-adapter";
 
@@ -81,6 +89,34 @@ const styles = {
       color: c.fg,
     };
   },
+  // Per-row issue-code badge. Errors (E-SC-*) get a red palette, warnings
+  // (W-SC-*) get amber. Anything else (forward-compat) renders neutral.
+  codeBadge: (code: string) => {
+    const isError = code.startsWith("E-");
+    const isWarning = code.startsWith("W-");
+    const palette = isError
+      ? { bg: "#fee2e2", fg: "#991b1b" }
+      : isWarning
+        ? { bg: "#fef3c7", fg: "#92400e" }
+        : { bg: "#e2e8f0", fg: "#475569" };
+    return {
+      display: "inline-block",
+      padding: "1px 6px",
+      borderRadius: 3,
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: 0.5,
+      background: palette.bg,
+      color: palette.fg,
+      marginRight: 4,
+      fontFamily: "ui-monospace, SFMono-Regular, monospace",
+    };
+  },
+  codeList: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 2,
+  },
 };
 
 const EM_DASH = "—";
@@ -126,6 +162,7 @@ export function ShortCircuitResultTable({ result }: ShortCircuitResultTableProps
               <th style={styles.th}>Ith (kA)</th>
               <th style={styles.th}>Sk&apos;&apos; (MVA)</th>
               <th style={styles.th}>Status</th>
+              <th style={styles.th}>Issues</th>
             </tr>
           </thead>
           <tbody>
@@ -160,7 +197,53 @@ function ShortCircuitRow({ row }: { row: ShortCircuitBusResult }) {
           {row.status}
         </span>
       </td>
+      <td style={styles.tdLeft}>
+        <RowIssueCodes
+          busInternalId={row.busInternalId}
+          codes={row.issueCodes}
+        />
+      </td>
     </tr>
+  );
+}
+
+function RowIssueCodes({
+  busInternalId,
+  codes,
+}: {
+  busInternalId: string;
+  codes: readonly ShortCircuitIssueCode[];
+}) {
+  // PR #16 review fix: per-row `issueCodes` were previously not
+  // surfaced. Render every E-SC-* / W-SC-* code on the row so a
+  // completed run with row-level diagnostics is visible to the user
+  // even when `result.issues` (top-level) is empty. Empty arrays
+  // render as an em dash — no fake codes are ever invented.
+  if (codes.length === 0) {
+    return (
+      <span
+        style={{ color: "#94a3b8", fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
+        data-testid={`result-sc-bus-${busInternalId}-issues`}
+      >
+        {EM_DASH}
+      </span>
+    );
+  }
+  return (
+    <span
+      style={styles.codeList}
+      data-testid={`result-sc-bus-${busInternalId}-issues`}
+    >
+      {codes.map((code, i) => (
+        <span
+          key={`${code}-${i}`}
+          style={styles.codeBadge(code)}
+          data-testid={`result-sc-bus-${busInternalId}-issue-${code}`}
+        >
+          {code}
+        </span>
+      ))}
+    </span>
   );
 }
 

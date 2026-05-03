@@ -224,6 +224,25 @@ describe("CalculationStatusPanel — Short Circuit gating (Stage 3 PR #5)", () =
     const button = screen.getByTestId("calc-run-sc-button") as HTMLButtonElement;
     expect(button.disabled).toBe(false);
   });
+
+  it("Short Circuit module shows ready_to_run status but disables Run when no transport is configured (aligned with LF/VD)", () => {
+    // PR #16 review (non-blocking no-transport consistency): the
+    // module-status enum has no `disabled_not_configured` literal and
+    // the LF/VD module mirrors the same convention. Documented &
+    // pinned here so future enum widening updates both modules
+    // together. The actual user signal is on the disabled Run button
+    // + the `calc-sc-disabled-reason` text.
+    renderPanel({ validation: VALID_SUMMARY });
+    expect(screen.getByTestId("calc-module-shortCircuit-status").textContent).toBe(
+      "ready_to_run",
+    );
+    const scButton = screen.getByTestId("calc-run-sc-button") as HTMLButtonElement;
+    expect(scButton.disabled).toBe(true);
+    // The LF Run button is disabled with the same explanatory text.
+    const lfButton = screen.getByTestId("calc-run-button") as HTMLButtonElement;
+    expect(lfButton.disabled).toBe(true);
+    expect(screen.getByTestId("calc-disabled-reason").textContent).toMatch(/transport/i);
+  });
 });
 
 describe("CalculationStatusPanel — Short Circuit run path (Stage 3 PR #5)", () => {

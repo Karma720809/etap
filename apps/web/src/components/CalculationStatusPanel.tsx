@@ -322,6 +322,16 @@ function computeShortCircuitModuleStatus(
   shortCircuit: ReturnType<typeof useCalculation>["shortCircuit"],
   hasValidationErrors: boolean,
 ): StageModuleStatus {
+  // PR #16 review (non-blocking no-transport consistency): the
+  // existing `StageModuleStatus` enum has no
+  // `disabled_not_configured` literal, and the LF/VD module mirrors
+  // the same convention — when the transport is null but readiness is
+  // clean, the module status stays `ready_to_run` and the disabled
+  // Run button + `calc-sc-disabled-reason` text carry the actual
+  // user-visible signal. We deliberately keep SC aligned with LF so
+  // the panel behaves consistently across modules; widening the enum
+  // is deferred (would also touch LF/VD which this PR must not
+  // disturb).
   if (hasValidationErrors) return "disabled_by_validation";
   switch (shortCircuit.lifecycle) {
     case "idle":

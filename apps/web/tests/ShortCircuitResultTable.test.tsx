@@ -171,3 +171,125 @@ describe("ShortCircuitResultTable — failed result with no rows", () => {
     expect(screen.queryByTestId(/result-sc-bus-/)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR #16 review fix — per-row issueCodes column
+// ---------------------------------------------------------------------------
+
+describe("ShortCircuitResultTable — per-row issueCodes column", () => {
+  it("renders a row's E-SC-001 issue code so per-row diagnostics are visible", () => {
+    const result = makeResult({
+      status: "warning",
+      busResults: [
+        {
+          busInternalId: "eq_bus_failed",
+          tag: "BUS-F",
+          voltageLevelKv: 6.6,
+          ikssKa: null,
+          ipKa: null,
+          ithKa: null,
+          skssMva: null,
+          status: "failed",
+          issueCodes: ["E-SC-001"],
+        },
+      ],
+    });
+    render(<ShortCircuitResultTable result={result} />);
+    const cell = screen.getByTestId("result-sc-bus-eq_bus_failed-issues");
+    expect(cell.textContent).toContain("E-SC-001");
+    // The dedicated badge testid is also present so consumers can
+    // assert on the exact code without parsing cell text.
+    expect(
+      screen.getByTestId("result-sc-bus-eq_bus_failed-issue-E-SC-001").textContent,
+    ).toBe("E-SC-001");
+  });
+
+  it("renders a row's W-SC-001 warning code", () => {
+    const result = makeResult({
+      status: "warning",
+      busResults: [
+        {
+          busInternalId: "eq_bus_warn",
+          tag: "BUS-W",
+          voltageLevelKv: 6.6,
+          ikssKa: 12.34,
+          ipKa: 31.5,
+          ithKa: 13,
+          skssMva: 141.1,
+          status: "warning",
+          issueCodes: ["W-SC-001"],
+        },
+      ],
+    });
+    render(<ShortCircuitResultTable result={result} />);
+    expect(
+      screen.getByTestId("result-sc-bus-eq_bus_warn-issue-W-SC-001").textContent,
+    ).toBe("W-SC-001");
+  });
+
+  it("renders multiple per-row issue codes (E-SC-001 + W-SC-002)", () => {
+    const result = makeResult({
+      status: "warning",
+      busResults: [
+        {
+          busInternalId: "eq_bus_multi",
+          tag: "BUS-M",
+          voltageLevelKv: 6.6,
+          ikssKa: 12.34,
+          ipKa: 31.5,
+          ithKa: 13,
+          skssMva: 141.1,
+          status: "warning",
+          issueCodes: ["E-SC-001", "W-SC-002"],
+        },
+      ],
+    });
+    render(<ShortCircuitResultTable result={result} />);
+    expect(
+      screen.getByTestId("result-sc-bus-eq_bus_multi-issue-E-SC-001"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("result-sc-bus-eq_bus_multi-issue-W-SC-002"),
+    ).toBeTruthy();
+    const cell = screen.getByTestId("result-sc-bus-eq_bus_multi-issues");
+    expect(cell.textContent).toContain("E-SC-001");
+    expect(cell.textContent).toContain("W-SC-002");
+  });
+
+  it("renders an em dash (no fake codes) when issueCodes is empty", () => {
+    // The default fixture has issueCodes: [] for the ok row.
+    render(<ShortCircuitResultTable result={makeResult()} />);
+    const cell = screen.getByTestId("result-sc-bus-eq_bus_mv-issues");
+    expect(cell.textContent).toBe("—");
+    // No badge testids exist for an empty issueCodes row — fake codes
+    // are never invented to fill the column.
+    expect(screen.queryByTestId(/result-sc-bus-eq_bus_mv-issue-/)).toBeNull();
+  });
+
+  it("surfaces row issueCodes even when result.issues (top-level) is empty", () => {
+    // Regression case for the PR #16 blocker: a completed run with
+    // per-row codes but no top-level issues must still show the row
+    // codes inline so diagnostics are not invisible.
+    const result = makeResult({
+      status: "warning",
+      issues: [],
+      busResults: [
+        {
+          busInternalId: "eq_bus_only_row",
+          tag: "BUS-OR",
+          voltageLevelKv: 6.6,
+          ikssKa: 12.34,
+          ipKa: 31.5,
+          ithKa: 13,
+          skssMva: 141.1,
+          status: "warning",
+          issueCodes: ["W-SC-003"],
+        },
+      ],
+    });
+    render(<ShortCircuitResultTable result={result} />);
+    expect(
+      screen.getByTestId("result-sc-bus-eq_bus_only_row-issue-W-SC-003").textContent,
+    ).toBe("W-SC-003");
+  });
+});
