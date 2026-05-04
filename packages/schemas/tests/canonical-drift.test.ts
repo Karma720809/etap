@@ -56,4 +56,65 @@ describe("canonical schema drift", () => {
     const copy = readFileSync(PACKAGE_JSON_SCHEMA, "utf8");
     expect(sha256(copy)).toBe(sha256(baseline));
   });
+
+  // Stage 3 ED-PR-01 — pin the optional Equipment Duty rating fields so a
+  // future edit cannot silently drop them or rename them. The byte-identical
+  // checks above already catch any divergence between baseline and package
+  // copies; these checks assert that the canonical fields named by the
+  // Stage 3 Equipment Duty spec (ED-OQ-01 / ED-OQ-04) exist in the canonical
+  // Zod and JSON Schema sources.
+  describe("Stage 3 Equipment Duty optional fields are pinned", () => {
+    const zodSource = readFileSync(PACKAGE_ZOD, "utf8");
+    const jsonSchemaSource = readFileSync(PACKAGE_JSON_SCHEMA, "utf8");
+
+    const requiredZodTokens = [
+      // Bus
+      "shortTimeWithstandKa: optionalPositiveNumber",
+      "shortTimeWithstandDurationS: optionalPositiveNumber",
+      "peakWithstandKa: optionalPositiveNumber",
+      // Cable
+      "shortCircuitKValue: optionalPositiveNumber",
+      // Breaker
+      "interruptingCapacityKa: optionalPositiveNumber",
+      // Project
+      "ProjectShortCircuitDefaultsSchema",
+      "shortCircuit: ProjectShortCircuitDefaultsSchema.optional()",
+      "defaultFaultClearingS: optionalPositiveNumber",
+    ];
+
+    for (const token of requiredZodTokens) {
+      it(`Zod source contains token: ${token}`, () => {
+        expect(zodSource).toContain(token);
+      });
+    }
+
+    const requiredJsonSchemaTokens = [
+      "\"shortTimeWithstandKa\"",
+      "\"shortTimeWithstandDurationS\"",
+      "\"peakWithstandKa\"",
+      "\"shortCircuitKValue\"",
+      "\"interruptingCapacityKa\"",
+      "\"ProjectShortCircuitDefaults\"",
+      "\"defaultFaultClearingS\"",
+    ];
+
+    for (const token of requiredJsonSchemaTokens) {
+      it(`JSON Schema source contains token: ${token}`, () => {
+        expect(jsonSchemaSource).toContain(token);
+      });
+    }
+
+    const forbiddenAliasTokens = [
+      "breakerMakingKa",
+      "busPeakWithstandKa",
+      "cableShortCircuitKValue",
+    ];
+
+    for (const token of forbiddenAliasTokens) {
+      it(`canonical sources do not introduce alias: ${token}`, () => {
+        expect(zodSource).not.toContain(token);
+        expect(jsonSchemaSource).not.toContain(token);
+      });
+    }
+  });
 });
