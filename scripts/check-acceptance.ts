@@ -19,6 +19,7 @@ interface StageBlock {
 interface CoverageManifest {
   stage1: StageBlock;
   stage2: StageBlock;
+  stage3: StageBlock;
 }
 
 const manifestPath = resolve(repoRoot, "scripts/acceptance-coverage.json");
@@ -26,6 +27,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CoverageManif
 
 const stage1Expected = Array.from({ length: 23 }, (_, i) => `AC${String(i + 1).padStart(2, "0")}`);
 const stage2Expected = Array.from({ length: 17 }, (_, i) => `AC-S2-${String(i + 1).padStart(2, "0")}`);
+const stage3Expected = Array.from({ length: 7 }, (_, i) => `AC-S3-${String(i + 1).padStart(2, "0")}`);
 
 let ok = true;
 
@@ -68,10 +70,12 @@ function reportStage(label: string, expected: string[], block: StageBlock | unde
 reportStage("Stage 1", stage1Expected, manifest.stage1);
 console.log("");
 reportStage("Stage 2", stage2Expected, manifest.stage2);
+console.log("");
+reportStage("Stage 3", stage3Expected, manifest.stage3);
 
 if (ok) {
   console.log(
-    `\nAll ${stage1Expected.length} Stage 1 + ${stage2Expected.length} Stage 2 acceptance criteria have a verification owner (mapped or deferred).`,
+    `\nAll ${stage1Expected.length} Stage 1 + ${stage2Expected.length} Stage 2 + ${stage3Expected.length} Stage 3 acceptance criteria have a verification owner (mapped or deferred).`,
   );
   process.exit(0);
 }
