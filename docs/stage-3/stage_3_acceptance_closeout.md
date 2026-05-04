@@ -97,78 +97,125 @@ The items below are **not** delivered by Stage 3 PRs #11–#16 and are
 They are recorded here so future planning does not silently treat them
 as satisfied.
 
-### 4.1 GC-SC-01 — Verified Short Circuit Golden Case (S3-FU-09)
+### 4.1 GC-SC-01 — Executable Short Circuit Golden Case (S3-FU-09)
 
-**Status: deferred / carryover. Not yet integrated. Not claimed as
-verified by Stage 3 PR #6.**
+**Status: integrated as an executable Stage 3 Golden Case in PR #7.
+The Stage 3 Golden Case integration status recorded in the
+`stage3GoldenCases` manifest entry is `provisional` until S3-OQ-08
+voltage-factor alignment ships and the strict sidecar comparison
+passes. This is distinct from the static support-package artifact's
+own `referenceStatus: "verified"` field, which describes only the
+hand-calc reference.**
 
-Per spec §15 / S3-FU-09 and plan §10, the Stage 3 verified Short
-Circuit Golden Case fixture (GC-SC-01) and the Golden Case schema
-extension equivalent to Stage 2 §12.7 are **deferred to a post-Stage-3
-Golden Case PR**. The current Stage 3 closeout (this PR) does **not**
-require a verified GC-SC-01; it only requires the deferral to be
-explicitly recorded.
+The original Stage 3 closeout (PR #6) deferred GC-SC-01 to a separate
+post-Stage-3 Golden Case PR per spec §15 / S3-FU-09 and plan §10. PR
+#7 (branch `stage-3/pr-7-gc-sc-01-integration`) is that follow-up: it
+integrates the existing static support-package artifact into an
+executable Stage 3 Short Circuit Golden Case owner. PR #7 does **not**
+implement Equipment Duty, the SC diagram overlay, the Golden Case
+schema extension, or any Stage 3 spec change; it integrates the
+already-documented GC-SC-01 reference and nothing more.
 
-Current state at closeout:
+Three layers are intentionally distinguished and remain separate
+artifacts:
 
-- The opt-in integration test
-  `packages/solver-adapter/tests/shortCircuit.integration.test.ts`
-  (gated by `RUN_SIDECAR_INTEGRATION=1`) exercises a real pandapower
-  short-circuit invocation but is a smoke test, not a verified Golden
-  Case (spec §S3-OQ-02 / §S3-OQ-08, plan §10).
-- A static reference artifact already exists in the Stage 1
-  pre-implementation support package at
-  `docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/gc_sc_01/GC-SC-01.utility_transformer_lv_fault.json`
-  (with `caseId: "GC-SC-01"` and `referenceStatus: "verified"`),
-  alongside the companion hand-calculation note
-  `GC-SC-01.hand_calculation.md`. This artifact is a Stage 1
-  support-package input, **not** an integrated Stage 3 acceptance
-  owner: no test, runner, or fixture loader in `packages/**`,
-  `apps/**`, or `services/**` consumes it; nothing in
-  `scripts/acceptance-coverage.json` references it; and no
-  `AC-S3-*` entry uses it as its verification owner. Its
-  `referenceStatus: "verified"` is therefore a property of the
-  static support-package document only, not a claim about Stage 3
-  acceptance.
-- No Stage 3 acceptance / executable Golden Case fixture is
-  integrated in this closeout PR. No `AC-S3-*` row treats GC-SC-01
-  (or any other `referenceStatus = "verified"` artifact) as a
-  Stage 3 verification owner.
-- pandapower smoke output is **not** treated as a verified IEC 60909
-  reference. The spec's `verified` / `provisional` / `regression_only`
-  status model (plan §10) carries forward unchanged into the future
-  Golden Case PR.
-- Hand calculations and pandapower runs remain separate per
-  S3-OQ-08.
+1. **Static support-package artifact (unchanged in PR #7):**
+   `docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/gc_sc_01/GC-SC-01.utility_transformer_lv_fault.json`
+   with `caseId: "GC-SC-01"` and `referenceStatus: "verified"`,
+   alongside the companion hand-calculation note
+   `GC-SC-01.hand_calculation.md`. The `referenceStatus: "verified"`
+   field on the support-package JSON describes the hand-calc
+   reference, not the solver-vs-reference comparison. The artifact
+   files are **not** modified by PR #7.
+2. **Executable fixture loader and structural test (added in PR #7):**
+   the Node-only subpath `@power-system-study/fixtures/golden-cases/gc-sc-01`
+   (file `packages/fixtures/src/golden_cases/gc_sc_01.node.ts`)
+   exposes `getGoldenCaseGcSc01()` /
+   `parseGoldenCasePercentTolerance()` / `GOLDEN_CASE_GC_SC_01_PATH`.
+   The loader is kept on a Node-only subpath because it imports
+   `node:fs` / `node:path` / `node:url` to read the authoritative
+   docs JSON; the root `@power-system-study/fixtures` entrypoint
+   stays browser-safe so `apps/web` (Vite) can keep importing the
+   demo fixture.
+   `packages/fixtures/tests/golden-case-gc-sc-01.test.ts` asserts the
+   artifact loads, the hand-calc expected values
+   (`Ik''=42.46 kA, ip=97.55 kA, X/R=6.22`) and the documented
+   tolerance literals (`±1% / ±2% / ±5%`) are pinned verbatim, the
+   fault-target bus exists on the input project file, the canonical
+   Stage 1 Zod schema (`PowerSystemProjectFileSchema`) accepts the
+   `input.projectFile`, and the Stage 1 / Stage 3 guardrails
+   (`calculationSnapshots` reserved-empty, no `calculationResults`)
+   hold on the artifact.
+3. **Orchestrator-layer comparison test (added in PR #7):**
+   `packages/solver-adapter/tests/shortCircuit.goldenCaseGcSc01.test.ts`
+   ships three layers:
+   - **Layer 1 (always):** builds the AppNetwork from the artifact's
+     `input.projectFile` via `buildAppNetwork(...)` and asserts it
+     resolves to `valid` with the slack utility, MV bus, transformer,
+     and LV fault target wired.
+   - **Layer 2 (always):** drives `runShortCircuitForAppNetwork`
+     against a stub transport that replays the documented hand-calc
+     reference values. Confirms the loader → orchestrator → tolerance
+     comparison pipeline is wired end-to-end and that the documented
+     tolerance bands accept the documented expected numerics — without
+     running pandapower, so the test is part of stock CI.
+   - **Layer 3 (opt-in):** strict comparison against the real Python
+     sidecar, gated by both `RUN_SIDECAR_INTEGRATION=1` (pandapower
+     smoke gate, parity with the Load Flow integration tests) and
+     `RUN_GOLDEN_CASE_VERIFICATION=1` (explicit consent to the strict
+     ±1% / ±2% comparison). Until S3-OQ-08 voltage-factor alignment
+     ships, Layer 3 is expected to surface a 5–10% mismatch versus the
+     hand calculation — the simplified hand-calc assumes
+     `voltageFactorC = 1.0` while pandapower's `case="max"` defaults
+     to `c=1.05` (LV) / `c=1.10` (HV). That mismatch IS the finding;
+     it is the gap that must close before the Stage 3 Golden Case
+     integration status for GC-SC-01 in the `stage3GoldenCases`
+     manifest entry may be promoted from `provisional` to `verified`.
 
-**Carryover work for the Golden Case follow-up PR (post-Stage-3):**
+The executable Golden Case ownership is recorded machine-readably in
+`scripts/acceptance-coverage.json` under a new `stage3GoldenCases`
+block (PR #7), and `scripts/check-acceptance.ts` enumerates that block
+alongside the AC-level coverage. The `referenceStatus` field on each
+`stage3GoldenCases` entry records the **Stage 3 Golden Case
+integration status for PR #7**, not the support-package artifact's
+own status field. For GC-SC-01 that integration status is currently
+`provisional`; promotion to `verified` requires both S3-OQ-08
+voltage-factor alignment and the Layer 3 strict sidecar comparison
+passing within the documented ±1% / ±2% tolerance. The static
+support-package artifact JSON keeps its own
+`referenceStatus: "verified"` field, which describes only the
+independent hand-calc reference and is not modified by PR #7.
 
-- Integrate the existing GC-SC-01 support-package artifact
-  (`docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/gc_sc_01/`)
-  into an executable Stage 3 Golden Case test owner — i.e., a
-  loader, a fixture under `packages/**`, and a per-bus comparison
-  runner that consumes the artifact's documented assumptions and
-  tolerance. The static `referenceStatus: "verified"` field on the
-  support-package JSON is **not** by itself an integration; the
-  follow-up PR must also wire it into `scripts/acceptance-coverage.json`
-  (or a dedicated Golden Case manifest) before any `AC-S3-*` row may
-  cite it as a verified Stage 3 acceptance owner.
-- Extend the Golden Case schema (Stage 2 §12.7 equivalent) to record
-  Short Circuit reference status uniformly across cases (so the
-  schema, not a free-form JSON field, owns the `verified` /
-  `provisional` / `regression_only` invariant).
-- Document the assumption set for any 5–10% mismatch versus hand
-  calculation before promoting any Stage 3 acceptance owner to
-  `verified`.
-- Bundling GC-SC-01 integration into Stage 3 closeout would be a
-  **proposed refinement** to the spec and requires a Stage 3 spec
-  revision PR before implementation (plan §6.7 note, plan §10 final
-  paragraph).
+**Residual carryover (post-PR-7):**
 
-GC-SC-01 must not be claimed as integrated into Stage 3 acceptance,
-or as a verified Stage 3 acceptance owner, in this closeout. The
-existing support-package artifact remains a Stage 1 support input
-until a separate post-Stage-3 PR integrates it as described above.
+- **S3-OQ-08 solver-option alignment.** Pin the sidecar's effective
+  IEC 60909 voltage factor to the slack source's `voltageFactor` (or
+  to `1.0` for the simplified-IEC assumption set), so Layer 3 of the
+  Golden Case comparison can run end-to-end against the documented
+  ±1% / ±2% tolerance. Until that lands, Layer 3 surfaces the
+  mismatch and the Stage 3 Golden Case integration status in the
+  `stage3GoldenCases` manifest entry stays `provisional`. A spec note
+  recording the outcome is required before promotion (plan §10
+  bullet "Document any 5–10% mismatch versus hand calculation before
+  treating it as a bug").
+- **Golden Case schema extension (Stage 2 §12.7 equivalent).** Still
+  deferred. PR #7 integrates GC-SC-01 against the existing JSON
+  shape; a follow-up may move the `verified` / `provisional` /
+  `regression_only` invariant from a free-form artifact field into
+  the Zod schema once a second Golden Case appears.
+- **Additional Golden Cases (GC-SC-02+).** Out of scope for PR #7.
+  When they land, they extend the same `stage3GoldenCases` block in
+  the manifest and reuse the loader + comparison harness shipped
+  here.
+
+GC-SC-01 is now an executable Stage 3 Golden Case integration entry
+with `provisional` integration status — it is **not** a verified
+Stage 3 acceptance owner, and no `AC-S3-01..07` row cites it. PR #7
+by itself does **not** cause any `AC-S3-01..07` row to flip — the
+AC-level coverage shipped in PR #6 stands. The new
+`stage3GoldenCases` block is the manifest surface for Golden Case
+integration tracking; an `AC-S3-*` row may cite GC-SC-01 only after
+the integration status is promoted to `verified` per the rules above.
 
 ### 4.2 Equipment Duty Check (S3-FU-12)
 
@@ -395,11 +442,21 @@ beyond adding a closeout pointer. Concretely:
   panel wiring, fail-closed handling for incomplete sidecar output,
   `AC-S3-01..07` mapping (this PR), and the `stage3` block in the
   acceptance manifest (this PR).
-- **Deferred / carryover (explicit, not claimed):** GC-SC-01 verified
-  Golden Case (S3-FU-09); SC diagram overlay (S3-FU-11);
-  `validateForShortCircuit()` readiness wrapper (carryover from spec
-  §13 PR #4); spec §15 follow-ups S3-FU-01..08 / S3-FU-10; cable
-  short-circuit withstand (plan §9).
+- **Integrated post-Stage-3 follow-up (PR #7):** GC-SC-01 executable
+  Short Circuit Golden Case integration (S3-FU-09 partial). Loader,
+  fixture structural test, and orchestrator-layer comparison harness
+  shipped; the Stage 3 Golden Case integration status recorded in the
+  `stage3GoldenCases` manifest entry is `provisional` until S3-OQ-08
+  voltage-factor alignment lands and the strict sidecar comparison
+  passes. The static support-package artifact's own
+  `referenceStatus: "verified"` field is unchanged and refers only to
+  the hand-calc reference. See §4.1 for the residual carryover.
+  AC-S3-01..07 ownership is unchanged.
+- **Deferred / carryover (explicit, not claimed):** SC diagram overlay
+  (S3-FU-11); `validateForShortCircuit()` readiness wrapper
+  (carryover from spec §13 PR #4); spec §15 follow-ups S3-FU-01..08 /
+  S3-FU-10; cable short-circuit withstand (plan §9); Golden Case
+  schema extension (Stage 2 §12.7 equivalent).
 - **Gated follow-up (requires spec revision before any code):**
   Equipment Duty Check (S3-FU-12), per spec §2.3 / §15 and plan §6.6
   / §8.

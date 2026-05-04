@@ -205,6 +205,9 @@ importers:
         specifier: workspace:*
         version: link:../network-model
     devDependencies:
+      '@power-system-study/fixtures':
+        specifier: workspace:*
+        version: link:../fixtures
       '@power-system-study/schemas':
         specifier: workspace:*
         version: link:../schemas
