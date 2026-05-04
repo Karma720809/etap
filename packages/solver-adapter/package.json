@@ -18,6 +18,7 @@
     "@power-system-study/network-model": "workspace:*"
   },
   "devDependencies": {
+    "@power-system-study/fixtures": "workspace:*",
     "@power-system-study/schemas": "workspace:*",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

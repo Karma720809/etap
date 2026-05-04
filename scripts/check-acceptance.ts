@@ -16,10 +16,22 @@ interface StageBlock {
   criteria: Criterion[];
 }
 
+interface GoldenCase {
+  id: string;
+  summary: string;
+  owner: string;
+  referenceStatus: "verified" | "provisional" | "regression_only";
+}
+
+interface GoldenCaseBlock {
+  cases: GoldenCase[];
+}
+
 interface CoverageManifest {
   stage1: StageBlock;
   stage2: StageBlock;
   stage3: StageBlock;
+  stage3GoldenCases?: GoldenCaseBlock;
 }
 
 const manifestPath = resolve(repoRoot, "scripts/acceptance-coverage.json");
@@ -28,6 +40,12 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CoverageManif
 const stage1Expected = Array.from({ length: 23 }, (_, i) => `AC${String(i + 1).padStart(2, "0")}`);
 const stage2Expected = Array.from({ length: 17 }, (_, i) => `AC-S2-${String(i + 1).padStart(2, "0")}`);
 const stage3Expected = Array.from({ length: 7 }, (_, i) => `AC-S3-${String(i + 1).padStart(2, "0")}`);
+const stage3GoldenCasesExpected = ["GC-SC-01"] as const;
+const VALID_REFERENCE_STATUSES: ReadonlySet<GoldenCase["referenceStatus"]> = new Set([
+  "verified",
+  "provisional",
+  "regression_only",
+]);
 
 let ok = true;
 
@@ -67,15 +85,60 @@ function reportStage(label: string, expected: string[], block: StageBlock | unde
   }
 }
 
+function reportGoldenCases(
+  label: string,
+  expected: readonly string[],
+  block: GoldenCaseBlock | undefined,
+): void {
+  console.log(`${label} executable Golden Case owners:`);
+  if (!block || !Array.isArray(block.cases)) {
+    console.log(`  (no '${label.toLowerCase().replace(" ", "")}' block in manifest)`);
+    ok = false;
+    return;
+  }
+  const seen = new Set(block.cases.map((c) => c.id));
+  for (const id of expected) {
+    const gc = block.cases.find((c) => c.id === id);
+    if (!gc) {
+      console.log(`  ${id}: MISSING from manifest`);
+      ok = false;
+      continue;
+    }
+    if (!VALID_REFERENCE_STATUSES.has(gc.referenceStatus)) {
+      console.log(`  ${id}: invalid referenceStatus ${JSON.stringify(gc.referenceStatus)}`);
+      ok = false;
+      continue;
+    }
+    console.log(`  ${id} [${gc.referenceStatus}]: ${gc.summary} → ${gc.owner}`);
+  }
+  const missing = expected.filter((id) => !seen.has(id));
+  const unowned = block.cases.filter((c) => !c.owner || c.owner.trim() === "");
+  const unexpected = block.cases.filter((c) => !expected.includes(c.id));
+  if (missing.length > 0) {
+    console.log(`  ${missing.length} golden cases missing from manifest: ${missing.join(", ")}`);
+    ok = false;
+  }
+  if (unowned.length > 0) {
+    console.log(`  ${unowned.length} golden cases have no owner: ${unowned.map((c) => c.id).join(", ")}`);
+    ok = false;
+  }
+  if (unexpected.length > 0) {
+    console.log(`  ${unexpected.length} unexpected golden cases in manifest: ${unexpected.map((c) => c.id).join(", ")}`);
+    ok = false;
+  }
+}
+
 reportStage("Stage 1", stage1Expected, manifest.stage1);
 console.log("");
 reportStage("Stage 2", stage2Expected, manifest.stage2);
 console.log("");
 reportStage("Stage 3", stage3Expected, manifest.stage3);
+console.log("");
+reportGoldenCases("Stage 3", stage3GoldenCasesExpected, manifest.stage3GoldenCases);
 
 if (ok) {
   console.log(
-    `\nAll ${stage1Expected.length} Stage 1 + ${stage2Expected.length} Stage 2 + ${stage3Expected.length} Stage 3 acceptance criteria have a verification owner (mapped or deferred).`,
+    `\nAll ${stage1Expected.length} Stage 1 + ${stage2Expected.length} Stage 2 + ${stage3Expected.length} Stage 3 acceptance criteria have a verification owner (mapped or deferred); ${stage3GoldenCasesExpected.length} Stage 3 Golden Case(s) integrated.`,
   );
   process.exit(0);
 }
