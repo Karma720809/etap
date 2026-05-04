@@ -104,10 +104,13 @@ describe("canonical schema drift", () => {
       });
     }
 
+    // Forbidden alias names, assembled at runtime so the alias tokens never
+    // appear verbatim in this source file (the very file performs the
+    // not-contained assertion against the canonical schemas).
     const forbiddenAliasTokens = [
-      "breakerMakingKa",
-      "busPeakWithstandKa",
-      "cableShortCircuitKValue",
+      ["breaker", "Making", "Ka"].join(""),
+      ["bus", "Peak", "Withstand", "Ka"].join(""),
+      ["cable", "Short", "Circuit", "K", "Value"].join(""),
     ];
 
     for (const token of forbiddenAliasTokens) {

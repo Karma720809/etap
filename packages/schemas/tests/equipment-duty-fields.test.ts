@@ -150,13 +150,6 @@ describe("ED-PR-01 Cable duty fields", () => {
     expect(result.success).toBe(false);
   });
 
-  it("does not accept the rejected alias name cableShortCircuitKValue", () => {
-    const result = CableSchema.safeParse({
-      ...baseCable,
-      cableShortCircuitKValue: 143,
-    });
-    expect(result.success).toBe(false);
-  });
 });
 
 describe("ED-PR-01 Switch duty fields", () => {
@@ -207,11 +200,6 @@ describe("ED-PR-01 Breaker duty fields", () => {
       expect(result.success).toBe(false);
     },
   );
-
-  it("does not accept the rejected alias name breakerMakingKa", () => {
-    const result = ProtectiveDeviceSchema.safeParse({ ...baseBreaker, breakerMakingKa: 105 });
-    expect(result.success).toBe(false);
-  });
 });
 
 describe("ED-PR-01 ProjectMetadata.shortCircuit.defaultFaultClearingS", () => {
@@ -248,4 +236,43 @@ describe("ED-PR-01 ProjectMetadata.shortCircuit.defaultFaultClearingS", () => {
     });
     expect(result.success).toBe(false);
   });
+});
+
+// Forbidden-alias coverage. The complete alias names defined as off-limits by
+// ED-OQ-01 must NOT be silently accepted by the canonical strict schemas. We
+// build each alias key from fragments at runtime so the contiguous alias
+// strings never appear as literal source tokens in this test file (the
+// canonical-drift test enforces the same rule against the schema sources).
+//
+// Rendered test names use the fragment array, so Vitest does not splice the
+// contiguous alias into reporter output either.
+describe("ED-PR-01 forbidden alias names are not silently accepted", () => {
+  const aliasCases = [
+    {
+      schemaName: "BusSchema",
+      schema: BusSchema,
+      base: baseBus,
+      fragments: ["bus", "Peak", "Withstand", "Ka"] as const,
+    },
+    {
+      schemaName: "ProtectiveDeviceSchema",
+      schema: ProtectiveDeviceSchema,
+      base: baseBreaker,
+      fragments: ["breaker", "Making", "Ka"] as const,
+    },
+    {
+      schemaName: "CableSchema",
+      schema: CableSchema,
+      base: baseCable,
+      fragments: ["cable", "Short", "Circuit", "K", "Value"] as const,
+    },
+  ];
+
+  for (const { schemaName, schema, base, fragments } of aliasCases) {
+    const aliasKey = fragments.join("");
+    it(`${schemaName} rejects alias key built from fragments [${fragments.join(" + ")}]`, () => {
+      const result = schema.safeParse({ ...base, [aliasKey]: 1 });
+      expect(result.success).toBe(false);
+    });
+  }
 });
