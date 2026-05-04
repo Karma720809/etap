@@ -166,8 +166,8 @@ the rationale, implementation impact, and acceptance-criteria impact.
 |---|---|---|---|---|
 | **ED-OQ-01** | Equipment rating fields | Add **optional** rating fields to the Stage 1 canonical schema for breakers, switches, and buses. Cable short-circuit withstand fields are **conditionally** added (see ED-OQ-04). All fields are `optional` so existing project files round-trip. Lands in a **dedicated schema-only PR** (ED-PR-01) before any duty-check code. | Stage 1 schema extension (Rev D → Rev D.1 minor); canonical-drift test updated; round-trip + serialization tests extended; no changes to non-rating fields. | AC-S3-D01 |
 | **ED-OQ-02** | Missing-rating policy | Missing rating on an in-scope element → per-row `unavailable` status with `W-DC-001` (`missing equipment rating`). The run is **not** blocked. Top-level status flips to `warning` if any row is `unavailable`. | Orchestrator must synthesize `unavailable` rows for ratable equipment lacking a rating; `validateForDutyCheck()` must NOT escalate missing ratings to errors. | AC-S3-D06 |
-| **ED-OQ-03** | Duty basis | Breaker interrupt: **`Ib`** (IEC 60909-0 §4.5) when computable; **`Ik''`** fallback labeled `provisional` with `W-DC-002`. Time-to-fault default `tmin = 0.05 s`. Peak duty: `ip` vs `breakerMakingKa` and `busPeakWithstandKa` (skip when peak rating absent). Thermal duty: `Ith` vs `√(I²t / t_clearing)` derived from short-time withstand fields, using project-level default `faultClearingS = 0.5 s` labeled `provisional`. Provisional vs verified: any row whose duty was computed from a fallback path or a project-level default carries `verdictBasis: "provisional"`; rows computed entirely from explicit project inputs and `Ib` carry `verdictBasis: "verified"`. | Orchestrator implements the basis matrix; runtime bundle records basis per row; no new sidecar command (duty check is pure TypeScript over an already-normalized `ShortCircuitResult` plus AppNetwork ratings). | AC-S3-D03 |
-| **ED-OQ-04** | Cable short-circuit withstand | **Included** in this Equipment Duty effort, not a separate spec. Rated by `cableShortCircuitKValue` (A·s^0.5 / mm²; IEC 60364-5-54 Table 43A) on `NetworkCableBranch` and the existing `crossSectionMm2`. Computed `I²t_allowed = (K × A)²`; `I²t_actual = Ik''² × t_clearing`. Clearing time uses the same project-level `faultClearingS` default as ED-OQ-03 thermal duty, so cable withstand rows are `provisional` until per-zone protection coordination ships. | Cable rating field added in ED-PR-01 alongside breaker / switch / bus ratings. Orchestrator emits per-cable duty rows under the same `DutyCheckResult.equipmentResults[]` slot as breakers / switches / buses (discriminated by `equipmentKind`). | AC-S3-D04 |
+| **ED-OQ-03** | Duty basis | Breaker interrupt: **`Ib`** (IEC 60909-0 §4.5) when computable, derived at the spec-defined MVP default `tmin = 0.05 s`; **`Ik''`** fallback (used only when `Ib` cannot be computed) labeled `provisional` with `W-DC-002`. Peak duty: `ip` vs `peakWithstandKa` on the relevant breaker / switch / busbar (the duty kind — `peakMaking` for breakers, `peakWithstand` for switches and busbars — is the discriminator; the schema field name is the same on every kind; skip when the `peakWithstandKa` field is absent). Thermal duty: `Ith` vs `√(I²t / t_clearing)` derived from short-time withstand fields, using the project-level default `faultClearingS = 0.5 s` labeled `provisional` with `W-DC-003`. Provisional vs verified: only `Ik''`-fallback rows (`W-DC-002`) and rows that consumed the project-level `faultClearingS` default (`W-DC-003`) carry `verdictBasis: "provisional"`. An `Ib` row computed at the spec-defined `tmin = 0.05 s` with explicit source inputs is `verdictBasis: "verified"` — the spec-defined `tmin` is the **MVP basis**, not a fallback, so it does not by itself flip a row to provisional and does not emit `W-DC-002`. | Orchestrator implements the basis matrix; runtime bundle records basis per row; no new sidecar command (duty check is pure TypeScript over an already-normalized `ShortCircuitResult` plus AppNetwork ratings). | AC-S3-D03 |
+| **ED-OQ-04** | Cable short-circuit withstand | **Included** in this Equipment Duty effort, not a separate spec. Rated by `Cable.shortCircuitKValue` (A·s^0.5 / mm²; IEC 60364-5-54 Table 43A) on `NetworkCableBranch` and the existing `crossSectionMm2`. Computed `I²t_allowed = (K × A)²`; `I²t_actual = Ik''² × t_clearing`. Clearing time uses the same project-level `faultClearingS` default as ED-OQ-03 thermal duty, so cable withstand rows are `provisional` until per-zone protection coordination ships. | Cable rating field added in ED-PR-01 alongside breaker / switch / bus ratings. Orchestrator emits per-cable duty rows under the same `DutyCheckResult.equipmentResults[]` slot as breakers / switches / buses (discriminated by `equipmentKind`). | AC-S3-D04 |
 | **ED-OQ-05** | Pass / warning / fail thresholds | Per duty row: `ok` when utilization ≤ 90%; `warning` when 90% < utilization ≤ 100%; `violation` when utilization > 100%. Utilization defined as `dutyActual / rating × 100%`. Margins are **fixed in spec for MVP**; per-project override is deferred (ED-FU-01). | Orchestrator applies the threshold table; UI renders the badge per row. | AC-S3-D05 |
 | **ED-OQ-06** | Runtime/store model | New runtime-only `DutyCheckRunBundle` returned by `runDutyCheckForBundle()`. New `CalculationModule` literal `"duty_check_bundle"`. Retention via the existing `(scenarioId, module, subCase)` key. **No project-file persistence.** `calculationSnapshots` remains an empty array; `calculationResults` is **not** introduced. The active-slot lifecycle asymmetry recorded in spec §8.2.1 (LF-narrow active slot) extends unchanged to duty-check successes — they live in `retainedResults["duty_check_bundle"]`, not in the active LF slot. | `packages/calculation-store/src/types.ts` widens `CalculationModule` to `"load_flow_bundle" \| "short_circuit_bundle" \| "duty_check_bundle"` and `RuntimeCalculationRecord.bundle` to `LoadFlowRunBundle \| ShortCircuitRunBundle \| DutyCheckRunBundle`. Reducer slot widened. | AC-S3-D07 |
 | **ED-OQ-07** | Acceptance criteria | New AC block `AC-S3-D01..D09` lands at the Equipment Duty acceptance closeout PR (ED-PR-05). The block is added to `scripts/acceptance-coverage.json` as a fourth top-level key (`stage3EquipmentDuty.criteria[]`) and `scripts/check-acceptance.ts` is extended with a `stage3EquipmentDutyExpected` array, parallel to the existing Stage 1 / Stage 2 / Stage 3 blocks. None of those edits land in **this** PR — the spec defines the AC contract; the closeout PR records owners. | Closeout-PR-only edits to the manifest + checker. | AC-S3-D01..D09 (definition) |
@@ -283,19 +283,27 @@ The run does **not** block. The top-level
 
 | Duty kind | Primary basis | Fallback | Provisional condition |
 |---|---|---|---|
-| Breaker interrupting | `Ib` (IEC 60909-0 §4.5), derived from `Ik''` and the source-equivalent `R/X` ratio at `tmin = 0.05 s` | `Ik''` directly when `Ib` cannot be computed (e.g., source `xrRatio` carried no time-to-decay information beyond the Stage 2 contract) | Any row using the `Ik''` fallback OR computed at the default `tmin = 0.05 s` is `verdictBasis: "provisional"` and emits `W-DC-002`. |
+| Breaker interrupting | `Ib` (IEC 60909-0 §4.5), derived from `Ik''` and the source-equivalent `R/X` ratio at the spec-defined MVP default `tmin = 0.05 s` | `Ik''` directly when `Ib` cannot be computed (e.g., source `xrRatio` carried no time-to-decay information beyond the Stage 2 contract) | Only the `Ik''` fallback row is `verdictBasis: "provisional"` and emits `W-DC-002`. An `Ib` row computed at the spec `tmin = 0.05 s` with explicit source inputs is `verdictBasis: "verified"` for MVP — the spec `tmin` is the MVP basis, not a fallback. |
 | Breaker peak (making) | `ip` from `ShortCircuitResult.busResults[].ipKa` vs `Breaker.peakWithstandKa` | None — when `ipKa` is `null` or `peakWithstandKa` is missing, the row is `unavailable` (peak duty only). The breaker's interrupting duty row is unaffected. | Always `verified` when both `ipKa` and `peakWithstandKa` are present. |
 | Switch / busbar thermal | `Ith` from `ShortCircuitResult.busResults[].ithKa`, scaled to the equipment's rated duration via the IEC 60865 `I × √(t / t_rated)` equivalence | None — when `ithKa` is `null`, the row is `unavailable`. | Any row computed with the project-level default `faultClearingS = 0.5 s` (i.e., where the per-zone clearing time is not yet wired) is `verdictBasis: "provisional"` and emits `W-DC-003`. |
-| Cable thermal withstand | `I²t_actual = ikssKa² × faultClearingS` vs `I²t_allowed = (K × crossSectionMm2)²` | None — when `cableShortCircuitKValue` is missing, the row is `unavailable`. | Always `provisional` until per-zone protection clearing time replaces the `faultClearingS = 0.5 s` default (ED-FU-04). |
+| Cable thermal withstand | `I²t_actual = ikssKa² × faultClearingS` vs `I²t_allowed = (K × crossSectionMm2)²` | None — when `Cable.shortCircuitKValue` is missing, the row is `unavailable`. | Always `provisional` and emits `W-DC-003` until per-zone protection clearing time replaces the `faultClearingS = 0.5 s` default (ED-FU-04). |
 | Switch / bus peak | `ip` vs `peakWithstandKa` | None — peak rating absent → `unavailable` for the peak comparison only. | Always `verified` when both are present. |
 
 **Time-to-fault assumption.** The MVP picks `tmin = 0.05 s` as the
-single global default for `Ib` derivation, matching the IEC 60909-0
-recommended minimum delay for a typical LV breaker. Per-equipment
-override of `tmin` is deferred (ED-FU-05). The `tmin` value used is
-recorded on `DutyCheckResult.metadata.basis.tminS` so the user can
-audit and so a future per-equipment override can flag a row's
-`verdictBasis` accordingly.
+single global **spec-defined** default for `Ib` derivation, matching
+the IEC 60909-0 recommended minimum delay for a typical LV breaker.
+Because this `tmin` is specified by the spec (not pulled from a
+missing-input fallback), an `Ib` row computed at this `tmin` with
+explicit source inputs is the **MVP verified basis** — it does
+**not** flip the row to `verdictBasis: "provisional"` and does
+**not** emit `W-DC-002`. `W-DC-002` is reserved for the `Ik''`
+fallback case, when `Ib` cannot be computed at all. Per-equipment
+override of `tmin` is deferred (ED-FU-05); when it lands, a row
+that overrides the spec default at the equipment level may surface
+a separate warning code so the audit trail records the override,
+but the spec-default `tmin` itself remains the MVP verified basis.
+The effective `tmin` value used per run is recorded on
+`DutyCheckResult.metadata.basis.tminS` for audit.
 
 **Provisional vs verified.** The overall `DutyCheckResult` carries
 no top-level `verdictBasis` field; the basis is per-row because a
@@ -347,7 +355,7 @@ Reasons:
 
 **Inputs.**
 
-- `cableShortCircuitKValue` (A·s^0.5/mm²) — added in ED-PR-01.
+- `Cable.shortCircuitKValue` (A·s^0.5/mm²) — added in ED-PR-01.
   Sourced from IEC 60364-5-54 Table 43A.
 - `crossSectionMm2` (mm²) — already on the Stage 1 schema.
 - `faultClearingS` (s) — project-level default `0.5 s`, configurable
@@ -357,7 +365,7 @@ Reasons:
 
 **Computation.**
 
-- `I²t_allowed = (cableShortCircuitKValue × crossSectionMm2)²`
+- `I²t_allowed = (Cable.shortCircuitKValue × crossSectionMm2)²`
   (units: A²·s).
 - `I²t_actual = (ikssKa × 1000)² × faultClearingS` (units: A²·s).
   The per-bus row that drives the cable's actual duty is the bus at
@@ -848,8 +856,23 @@ Equipment Duty PR to ship:
 - **ED-FU-08** — Diagram overlay for duty status (parallels Short
   Circuit S3-FU-11).
 - **ED-FU-09** — Equipment Duty Golden Cases (parallels S3-FU-09).
-  Required before any duty-check row may carry `verdictBasis:
-  "verified"` for a release-gate pass.
+  This is a future release-quality / promotion-to-verified caveat,
+  **not** a prerequisite for ED-PR-01..05 to ship. The MVP
+  `verdictBasis: "verified"` label means **algorithmically
+  verified** against the spec basis matrix (§4.3 / §4.4) — i.e.,
+  computed entirely from explicit project inputs without an `Ik''`
+  fallback (`W-DC-002`) or `faultClearingS` default (`W-DC-003`).
+  It does **not** mean release-gate-verified against an independent
+  reference such as a hand calculation, IEC textbook example,
+  verified spreadsheet, or independent commercial tool result.
+  Until Equipment Duty Golden Cases land, the Equipment Duty
+  acceptance closeout (ED-PR-05) and any release notes must
+  explicitly distinguish algorithmic `verified` from
+  release-gate-verified, mirroring the GC-SC-01 `provisional` /
+  `verified` discipline recorded in
+  `stage_3_acceptance_closeout.md` §4.1. Implementation PRs
+  (ED-PR-01..04) are not blocked by the absence of these Golden
+  Cases.
 
 ---
 
