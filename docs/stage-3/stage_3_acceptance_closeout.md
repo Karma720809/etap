@@ -81,7 +81,7 @@ ACs land as `mapped` in this closeout** — none are deferred.
 | **AC-S3-04** `ShortCircuitResult` model defined (per-bus rows by `busInternalId`, IEC 60909 outputs `Ik''` / `ip` / `Ith` / `Sk''`, per-row + top-level status, issues, metadata; `ipKa` / `ithKa` may be `null`). | mapped | `packages/solver-adapter/src/shortCircuitResults.ts` + `packages/solver-adapter/src/shortCircuitRunner.ts` (PR #15). `packages/solver-adapter/tests/shortCircuitResults.test.ts` + `packages/solver-adapter/tests/shortCircuitRunner.test.ts` (PR #15). UI consumer: `apps/web/src/components/ShortCircuitResultTable.tsx` + `apps/web/tests/ShortCircuitResultTable.test.tsx` (PR #16). |
 | **AC-S3-05** Runtime-only guardrails preserved: `calculationSnapshots` stays empty in every Stage 3 PR; `calculationResults` is not added; no disk persistence; no fake numbers; runtime snapshot reused unchanged from Stage 2. | mapped | `packages/calculation-store/src/types.ts` (`CalculationModule` widened to include `"short_circuit_bundle"`; `RuntimeCalculationRecord.bundle` widened to `LoadFlowRunBundle \| ShortCircuitRunBundle`) + `packages/calculation-store/src/reducer.ts` retention slot (PR #15). `packages/calculation-store/tests/reducer.test.ts` Short Circuit retention cases (`retains a successful Short Circuit bundle under the short_circuit_bundle key`, stale flag, project edit semantics). `packages/schemas/src/stage_1_project_schema.rev_d.zod.ts` continues to pin `calculationSnapshots` to `max(0)`. `apps/web/tests/calculationStore.test.tsx` asserts the project file is unchanged after a Short Circuit run (PR #16). Failed runs surface `E-SC-*` codes with all-null numerics rather than fabricated values (commit `9777a89` fail-closed guard). |
 | **AC-S3-06** Non-goals and deferred items explicitly listed (minimum case, line-end faults, generator subtransient, motor contribution, equipment duty, multi-slack, single-phase / DC / mixed-phase faults, arc flash, report export, cable sizing). | mapped | Spec §§2.3 and 15 (PR #11). Plan §§4.2, 6.6, 8, 9 (PR #12). This document §4 (PR #6) records the carryover state at closeout. |
-| **AC-S3-07** Implementation PR breakdown defined (PR #2 contract / wire types only; PR #3 sidecar + adapter; PR #4 orchestrator + result types + retention; PR #5 UI; PR #6 acceptance closeout). | mapped | Spec §13 (PR #11). Plan §6 (PR #12). This document §2 PR ledger (PR #6) records that the breakdown was followed in PRs #13–#16 and is being closed by this PR. |
+| **AC-S3-07** Implementation PR breakdown defined (PR #2 contract / wire types only; PR #3 sidecar + adapter; PR #4 orchestrator + result types + retention; PR #5 UI; PR #6 acceptance closeout). | mapped | Spec §13 (PR #11). Plan §6 (PR #12). This document §2 PR ledger (PR #6) records that PRs #13–#16 shipped scope against the breakdown (with the carryover items in §4.4 explicitly recorded as not delivered) and that this PR closes the stage. |
 
 The `scripts/check-acceptance.ts` extension reports the same status
 machine-readably: `pnpm check:acceptance` enumerates all seven entries
@@ -116,7 +116,24 @@ Current state at closeout:
   (gated by `RUN_SIDECAR_INTEGRATION=1`) exercises a real pandapower
   short-circuit invocation but is a smoke test, not a verified Golden
   Case (spec §S3-OQ-02 / §S3-OQ-08, plan §10).
-- No fixture is recorded as `referenceStatus = "verified"`.
+- A static reference artifact already exists in the Stage 1
+  pre-implementation support package at
+  `docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/gc_sc_01/GC-SC-01.utility_transformer_lv_fault.json`
+  (with `caseId: "GC-SC-01"` and `referenceStatus: "verified"`),
+  alongside the companion hand-calculation note
+  `GC-SC-01.hand_calculation.md`. This artifact is a Stage 1
+  support-package input, **not** an integrated Stage 3 acceptance
+  owner: no test, runner, or fixture loader in `packages/**`,
+  `apps/**`, or `services/**` consumes it; nothing in
+  `scripts/acceptance-coverage.json` references it; and no
+  `AC-S3-*` entry uses it as its verification owner. Its
+  `referenceStatus: "verified"` is therefore a property of the
+  static support-package document only, not a claim about Stage 3
+  acceptance.
+- No Stage 3 acceptance / executable Golden Case fixture is
+  integrated in this closeout PR. No `AC-S3-*` row treats GC-SC-01
+  (or any other `referenceStatus = "verified"` artifact) as a
+  Stage 3 verification owner.
 - pandapower smoke output is **not** treated as a verified IEC 60909
   reference. The spec's `verified` / `provisional` / `regression_only`
   status model (plan §10) carries forward unchanged into the future
@@ -126,19 +143,32 @@ Current state at closeout:
 
 **Carryover work for the Golden Case follow-up PR (post-Stage-3):**
 
-- Author the Golden Case fixture (network, expected per-bus `Ik''` /
-  `ip` / `Ith` / `Sk''`, voltage factor, transformer correction, X/R,
-  source strength, tolerance).
+- Integrate the existing GC-SC-01 support-package artifact
+  (`docs/stage-1-baseline/stage_1_preimplementation_support_v1_1/golden_cases/gc_sc_01/`)
+  into an executable Stage 3 Golden Case test owner — i.e., a
+  loader, a fixture under `packages/**`, and a per-bus comparison
+  runner that consumes the artifact's documented assumptions and
+  tolerance. The static `referenceStatus: "verified"` field on the
+  support-package JSON is **not** by itself an integration; the
+  follow-up PR must also wire it into `scripts/acceptance-coverage.json`
+  (or a dedicated Golden Case manifest) before any `AC-S3-*` row may
+  cite it as a verified Stage 3 acceptance owner.
 - Extend the Golden Case schema (Stage 2 §12.7 equivalent) to record
-  Short Circuit reference status.
+  Short Circuit reference status uniformly across cases (so the
+  schema, not a free-form JSON field, owns the `verified` /
+  `provisional` / `regression_only` invariant).
 - Document the assumption set for any 5–10% mismatch versus hand
-  calculation before promoting to `verified`.
-- Bundling GC-SC-01 into Stage 3 closeout would be a **proposed
-  refinement** to the spec and requires a Stage 3 spec revision PR
-  before implementation (plan §6.7 note, plan §10 final paragraph).
+  calculation before promoting any Stage 3 acceptance owner to
+  `verified`.
+- Bundling GC-SC-01 integration into Stage 3 closeout would be a
+  **proposed refinement** to the spec and requires a Stage 3 spec
+  revision PR before implementation (plan §6.7 note, plan §10 final
+  paragraph).
 
-GC-SC-01 must not be claimed as verified, integrated, or in-scope for
-Stage 3 closeout.
+GC-SC-01 must not be claimed as integrated into Stage 3 acceptance,
+or as a verified Stage 3 acceptance owner, in this closeout. The
+existing support-package artifact remains a Stage 1 support input
+until a separate post-Stage-3 PR integrates it as described above.
 
 ### 4.2 Equipment Duty Check (S3-FU-12)
 
@@ -305,17 +335,32 @@ guardrail. Concretely, this PR:
 
 ## 6. Mandatory check matrix
 
-Per plan §12.2, every Stage 3 PR must record the unconditional check
-matrix in its PR description. For this docs-only closeout PR the
-required checks are `pnpm typecheck` and `pnpm check:acceptance` (plan
-§12.2 — docs-only PR baseline). The remaining commands in the matrix
-(`pnpm test`, `pnpm check:fixtures`, `pnpm --filter web build`) are
-recorded against the originating implementation PRs (#13–#16) and are
-expected to remain green at closeout time, since this PR touches no
-code.
+Plan §12.2 / spec §13 PR #6 require the closeout PR to record the
+**full** check matrix in its merge artifacts:
 
-The check evidence is recorded in the PR description after the doc
-edits land; this document does not encode command output.
+- `pnpm typecheck`
+- `pnpm test`
+- `pnpm check:fixtures`
+- `pnpm check:acceptance`
+- `pnpm --filter web build`
+
+This document does **not** downscope that requirement. What this
+closeout PR records is which of those commands were executed locally
+against the doc / manifest / checker edits in this PR, and which are
+left to be recorded in the PR description (or rerun) before merge:
+
+| Command | Status for this PR | Notes |
+|---|---|---|
+| `pnpm typecheck` | run locally during this closeout PR | Verifies the `scripts/check-acceptance.ts` extension compiles. |
+| `pnpm check:acceptance` | run locally during this closeout PR | Verifies the new `stage3` block enumerates `AC-S3-01..07` and that `pnpm check:acceptance` passes with the closeout owner strings. |
+| `pnpm test` | **not run** in this PR | Docs / manifest / checker edits do not change runtime test behavior. To be recorded in the PR description (or rerun by the merge gate) per plan §12.2. |
+| `pnpm check:fixtures` | **not run** in this PR | Same rationale: no fixture or schema change in this PR. To be recorded in the PR description (or rerun) per plan §12.2. |
+| `pnpm --filter web build` | **not run** in this PR | Same rationale: no `apps/web/**` change in this PR. To be recorded in the PR description (or rerun) per plan §12.2. |
+
+Commands marked **not run** are explicitly **not** claimed to have
+passed in this PR. The closeout-PR description (or the merge gate)
+must record their result before merge so the full plan §12.2 matrix
+is satisfied as a closeout artifact.
 
 ---
 
