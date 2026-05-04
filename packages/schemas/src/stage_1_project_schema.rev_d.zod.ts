@@ -32,6 +32,11 @@ const optionalNullableNumber = z.number().finite().nullable().optional();
 const nullableString = z.string().nullable();
 const optionalNullableString = z.string().nullable().optional();
 const isoDateText = z.string().min(1);
+// Equipment Duty rating fields are optional and, when present, must be > 0.
+// They are never null: missing rating is expressed by absence so existing
+// project files round-trip unchanged. See docs/stage-3/stage_3_equipment_duty_spec.md
+// (ED-OQ-01 / ED-OQ-04).
+const optionalPositiveNumber = z.number().finite().positive().optional();
 
 export const StandardBasisSchema = z.enum(["IEC", "NEC", "UserDefined"]);
 export const EquipmentKindSchema = z.enum([
@@ -80,6 +85,9 @@ export const BusSchema = BaseEquipmentSchema.extend({
     "ungrounded",
     "unknown",
   ]).optional(),
+  shortTimeWithstandKa: optionalPositiveNumber,
+  shortTimeWithstandDurationS: optionalPositiveNumber,
+  peakWithstandKa: optionalPositiveNumber,
 }).strict();
 
 export const UtilitySourceSchema = BaseEquipmentSchema.extend({
@@ -154,6 +162,7 @@ export const CableSchema = BaseEquipmentSchema.extend({
   soilResistivityK_m_W: optionalNullableNumber,
   groupingCondition: optionalNullableString,
   loadedConductors: optionalNullableNumber,
+  shortCircuitKValue: optionalPositiveNumber,
   status: EquipmentStatusSchema,
 }).strict();
 
@@ -196,6 +205,9 @@ export const SwitchDeviceSchema = BaseEquipmentSchema.extend({
   normalState: z.enum(["open", "closed"]).optional(),
   ratedVoltageKv: optionalNullableNumber,
   ratedCurrentA: optionalNullableNumber,
+  shortTimeWithstandKa: optionalPositiveNumber,
+  shortTimeWithstandDurationS: optionalPositiveNumber,
+  peakWithstandKa: optionalPositiveNumber,
   status: EquipmentStatusSchema,
 }).strict();
 
@@ -210,6 +222,8 @@ export const ProtectiveDeviceSchema = BaseEquipmentSchema.extend({
   ratedCurrentA: nullableNumber,
   breakingCapacityKa: optionalNullableNumber,
   makingCapacityKa: optionalNullableNumber,
+  interruptingCapacityKa: optionalPositiveNumber,
+  peakWithstandKa: optionalPositiveNumber,
   tripUnitType: optionalNullableString,
   clearingTimeS: optionalNullableNumber,
   upstreamEquipment: optionalNullableString,
@@ -323,6 +337,10 @@ export const ValidationSummarySchema = z.object({
   issues: z.array(ValidationIssueSchema),
 }).strict();
 
+export const ProjectShortCircuitDefaultsSchema = z.object({
+  defaultFaultClearingS: optionalPositiveNumber,
+}).strict();
+
 export const ProjectMetadataSchema = z.object({
   projectId: z.string().min(1),
   projectName: z.string().min(1),
@@ -337,6 +355,7 @@ export const ProjectMetadataSchema = z.object({
   updatedAt: isoDateText,
   lastSavedAt: z.string().nullable().optional(),
   lastSavedByText: z.string().nullable().optional(),
+  shortCircuit: ProjectShortCircuitDefaultsSchema.optional(),
 }).strict();
 
 export const PowerSystemProjectFileSchema = z.object({

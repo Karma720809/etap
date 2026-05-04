@@ -194,6 +194,19 @@
         },
         "lastSavedByText": {
           "$ref": "#/$defs/NullableString"
+        },
+        "shortCircuit": {
+          "$ref": "#/$defs/ProjectShortCircuitDefaults"
+        }
+      }
+    },
+    "ProjectShortCircuitDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultFaultClearingS": {
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     },
@@ -393,6 +406,18 @@
                 "ungrounded",
                 "unknown"
               ]
+            },
+            "shortTimeWithstandKa": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "shortTimeWithstandDurationS": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "peakWithstandKa": {
+              "type": "number",
+              "exclusiveMinimum": 0
             }
           }
         }
@@ -766,6 +791,10 @@
         "loadedConductors": {
           "$ref": "#/$defs/NullableNumber"
         },
+        "shortCircuitKValue": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
         "status": {
           "enum": [
             "in_service",
@@ -1009,6 +1038,18 @@
         "ratedCurrentA": {
           "$ref": "#/$defs/NullableNumber"
         },
+        "shortTimeWithstandKa": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "shortTimeWithstandDurationS": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "peakWithstandKa": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
         "status": {
           "enum": [
             "in_service",
@@ -1091,6 +1132,14 @@
         },
         "makingCapacityKa": {
           "$ref": "#/$defs/NullableNumber"
+        },
+        "interruptingCapacityKa": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "peakWithstandKa": {
+          "type": "number",
+          "exclusiveMinimum": 0
         },
         "tripUnitType": {
           "$ref": "#/$defs/NullableString"
