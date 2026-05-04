@@ -7,7 +7,10 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./demo": "./src/stage_1_demo_fixture.json"
+    "./demo": "./src/stage_1_demo_fixture.json",
+    "./golden-cases/gc-sc-01": {
+      "node": "./src/golden_cases/gc_sc_01.node.ts"
+    }
   },
   "scripts": {
     "typecheck": "tsc -b",

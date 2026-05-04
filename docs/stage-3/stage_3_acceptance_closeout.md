@@ -128,10 +128,15 @@ artifacts:
    reference, not the solver-vs-reference comparison. The artifact
    files are **not** modified by PR #7.
 2. **Executable fixture loader and structural test (added in PR #7):**
-   `packages/fixtures/src/index.ts` exposes
-   `getGoldenCaseGcSc01()` / `parseGoldenCasePercentTolerance()` /
-   `GOLDEN_CASE_GC_SC_01_PATH`. The loader reads the authoritative
-   docs JSON via `node:fs` so no copy is kept under `packages/**`.
+   the Node-only subpath `@power-system-study/fixtures/golden-cases/gc-sc-01`
+   (file `packages/fixtures/src/golden_cases/gc_sc_01.node.ts`)
+   exposes `getGoldenCaseGcSc01()` /
+   `parseGoldenCasePercentTolerance()` / `GOLDEN_CASE_GC_SC_01_PATH`.
+   The loader is kept on a Node-only subpath because it imports
+   `node:fs` / `node:path` / `node:url` to read the authoritative
+   docs JSON; the root `@power-system-study/fixtures` entrypoint
+   stays browser-safe so `apps/web` (Vite) can keep importing the
+   demo fixture.
    `packages/fixtures/tests/golden-case-gc-sc-01.test.ts` asserts the
    artifact loads, the hand-calc expected values
    (`Ik''=42.46 kA, ip=97.55 kA, X/R=6.22`) and the documented

@@ -27,7 +27,7 @@ import {
   GOLDEN_CASE_GC_SC_01_PATH,
   getGoldenCaseGcSc01,
   parseGoldenCasePercentTolerance,
-} from "../src/index.js";
+} from "../src/golden_cases/gc_sc_01.node.js";
 
 describe("GC-SC-01 Golden Case fixture — loader", () => {
   it("resolves to the authoritative docs/stage-1-baseline support artifact", () => {

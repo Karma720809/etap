@@ -45,7 +45,7 @@ import { buildAppNetwork } from "@power-system-study/network-model";
 import {
   getGoldenCaseGcSc01,
   parseGoldenCasePercentTolerance,
-} from "@power-system-study/fixtures";
+} from "@power-system-study/fixtures/golden-cases/gc-sc-01";
 
 import {
   runShortCircuitForAppNetwork,
