@@ -6,6 +6,7 @@
   },
   "include": ["src/**/*"],
   "references": [
+    { "path": "../duty-check" },
     { "path": "../network-model" },
     { "path": "../solver-adapter" }
   ]

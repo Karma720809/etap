@@ -35,6 +35,17 @@ export const SHORT_CIRCUIT_BUNDLE_MODULE: CalculationModule =
   "short_circuit_bundle";
 
 /**
+ * Module identifier for the Equipment Duty Check bundle (Stage 3
+ * ED-PR-03 / Equipment Duty spec §4.6 / ED-OQ-06). Distinct from
+ * the result-API discriminator `DutyCheckResult.module = "dutyCheck"`:
+ * both identify the Equipment Duty calculation but live on different
+ * APIs (Equipment Duty spec §4.6 note + the `DutyCheckResult.module`
+ * doc).
+ */
+export const DUTY_CHECK_BUNDLE_MODULE: CalculationModule =
+  "duty_check_bundle";
+
+/**
  * Build the canonical retention key string used to index
  * `CalculationStoreState.retainedResults`. Stable, JSON-safe, and
  * stringifiable so test snapshots compare cleanly.
@@ -50,11 +61,27 @@ export function retentionKeyToString(key: RuntimeResultRetentionKey): string {
 }
 
 /**
+ * Type-narrowing predicate: a runtime bundle is a Duty Check bundle
+ * when it carries the `dutyCheck` field — the discriminator on the
+ * runtime side. The calculation-store does not import the
+ * `DutyCheckRunBundle` type at runtime so it can stay narrow on the
+ * dependency side while still routing the bundle correctly.
+ */
+function isDutyCheckBundle(
+  bundle: RuntimeCalculationBundle,
+): bundle is Extract<RuntimeCalculationBundle, { dutyCheck: unknown }> {
+  return (
+    typeof (bundle as { dutyCheck?: unknown }).dutyCheck === "object" &&
+    (bundle as { dutyCheck?: unknown }).dutyCheck !== null
+  );
+}
+
+/**
  * Type-narrowing predicate: a runtime bundle is a Short Circuit bundle
- * when it carries the `shortCircuit` field (the discriminator on the
- * runtime side; the calculation-store has no other way to tell two
- * bundles apart without importing the `ShortCircuitRunBundle` type
- * itself).
+ * when it carries the `shortCircuit` field but NOT a `dutyCheck` field.
+ * The duty-check bundle carries both `dutyCheck` and `shortCircuit`
+ * (the latter is the upstream SC run it consumed), so the
+ * narrower-first probe is `isDutyCheckBundle`.
  *
  * This is the same shape `runShortCircuitForAppNetwork()` returns
  * (spec §7.2). The reducer uses it to derive the retention key when
@@ -62,7 +89,8 @@ export function retentionKeyToString(key: RuntimeResultRetentionKey): string {
  */
 function isShortCircuitBundle(
   bundle: RuntimeCalculationBundle,
-): bundle is Extract<RuntimeCalculationBundle, { shortCircuit: unknown }> {
+): bundle is Extract<RuntimeCalculationBundle, { shortCircuit: unknown; dutyCheck?: undefined }> {
+  if (isDutyCheckBundle(bundle)) return false;
   return (
     typeof (bundle as { shortCircuit?: unknown }).shortCircuit === "object" &&
     (bundle as { shortCircuit?: unknown }).shortCircuit !== null
@@ -70,16 +98,18 @@ function isShortCircuitBundle(
 }
 
 /**
- * Default module for a runtime bundle. Stage 3 PR #4 derives the
- * module from the bundle's discriminator so callers can omit the
- * explicit `module` argument when retaining a freshly produced run.
+ * Default module for a runtime bundle. The discriminator order
+ * matters: a `DutyCheckRunBundle` carries both `dutyCheck` AND
+ * `shortCircuit` (the upstream SC run it consumed), so the
+ * duty-check probe runs first. The Short Circuit probe excludes
+ * duty-check bundles explicitly to keep the routing unambiguous.
  */
 function defaultModuleForBundle(
   bundle: RuntimeCalculationBundle,
 ): CalculationModule {
-  return isShortCircuitBundle(bundle)
-    ? SHORT_CIRCUIT_BUNDLE_MODULE
-    : LOAD_FLOW_BUNDLE_MODULE;
+  if (isDutyCheckBundle(bundle)) return DUTY_CHECK_BUNDLE_MODULE;
+  if (isShortCircuitBundle(bundle)) return SHORT_CIRCUIT_BUNDLE_MODULE;
+  return LOAD_FLOW_BUNDLE_MODULE;
 }
 
 /**

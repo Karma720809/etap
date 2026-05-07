@@ -14,6 +14,8 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@power-system-study/network-model": "workspace:*",
+    "@power-system-study/schemas": "workspace:*",
     "@power-system-study/solver-adapter": "workspace:*"
   },
   "devDependencies": {

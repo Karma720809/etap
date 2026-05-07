@@ -6,6 +6,8 @@
   },
   "include": ["src/**/*"],
   "references": [
+    { "path": "../network-model" },
+    { "path": "../schemas" },
     { "path": "../solver-adapter" }
   ]
 }
