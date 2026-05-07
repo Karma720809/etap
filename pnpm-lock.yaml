@@ -29,6 +29,9 @@ importers:
       '@power-system-study/core-model':
         specifier: workspace:*
         version: link:../../packages/core-model
+      '@power-system-study/duty-check':
+        specifier: workspace:*
+        version: link:../../packages/duty-check
       '@power-system-study/fixtures':
         specifier: workspace:*
         version: link:../../packages/fixtures

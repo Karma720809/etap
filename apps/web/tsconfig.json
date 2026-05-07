@@ -15,6 +15,7 @@
     { "path": "../../packages/fixtures" },
     { "path": "../../packages/network-model" },
     { "path": "../../packages/solver-adapter" },
-    { "path": "../../packages/calculation-store" }
+    { "path": "../../packages/calculation-store" },
+    { "path": "../../packages/duty-check" }
   ]
 }
