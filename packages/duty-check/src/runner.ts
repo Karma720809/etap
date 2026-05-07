@@ -68,8 +68,8 @@ export interface RunDutyCheckOptions {
    * Stage 1 project file. Used to inspect equipment rating fields
    * when the orchestrator decides per-row status (`missing_rating`
    * vs `not_applicable` vs `not_evaluated`). Optional: when omitted,
-   * every emitted row is `not_evaluated` — the orchestrator does not
-   * fabricate ratings or invent rows.
+   * the orchestrator emits no per-equipment rows — it has no
+   * authoritative source for ratings and refuses to fabricate them.
    */
   project?: PowerSystemProjectFile;
   /** Per-run duty-check options (defaults per ED-OQ-03 / ED-OQ-04). */
@@ -273,7 +273,11 @@ function enumerateRows(
         equipmentKind: "switch",
         criterion: "switchPeak",
         ratingPresent: isRatingPresent(sw.peakWithstandKa),
-        peakOptOut: true,
+        // Switch peak IS an applicable criterion when a switch is in
+        // scope; missing `peakWithstandKa` is a data gap, not an
+        // opt-out (only breakers carry the peak opt-out semantics
+        // per ED-OQ-03).
+        peakOptOut: false,
         shortCircuitResultId,
       }),
     );
@@ -296,7 +300,10 @@ function enumerateRows(
         equipmentKind: "bus",
         criterion: "busPeak",
         ratingPresent: isRatingPresent(bus.peakWithstandKa),
-        peakOptOut: true,
+        // Bus peak IS an applicable criterion when a bus is in
+        // scope; missing `peakWithstandKa` is a data gap. Same
+        // rationale as switch peak above.
+        peakOptOut: false,
         shortCircuitResultId,
       }),
     );
@@ -370,4 +377,3 @@ function makeRow(args: MakeRowArgs): DutyCheckEquipmentResult {
     issueCodes,
   };
 }
-

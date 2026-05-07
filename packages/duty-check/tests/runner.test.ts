@@ -170,7 +170,11 @@ describe("runDutyCheckForBundle — per-row status mapping", () => {
     }
   });
 
-  it("emits missing_rating for switch / bus when rating fields are absent", () => {
+  it("emits missing_rating for every absent switch / bus rating, including peak (no opt-out)", () => {
+    // Only breakers carry the peak opt-out semantics per ED-OQ-03;
+    // for switches and buses, missing peakWithstandKa is a data
+    // gap, not an opt-out, so it must surface as missing_rating +
+    // W-DC-001 with all numeric fields null (no fake numbers).
     const sc = fakeShortCircuitBundle("SCN-A", "valid");
     const bundle = runDutyCheckForBundle(sc, {
       project: projectWithDutyEquipment({
@@ -186,9 +190,12 @@ describe("runDutyCheckForBundle — per-row status mapping", () => {
     const switchPeak = bundle.dutyCheck.equipmentResults.find(
       (r) => r.criterion === "switchPeak",
     );
-    // Switch peak is opt-out by absence per the contract.
-    expect(switchPeak?.status).toBe("not_applicable");
-    expect(switchPeak?.issueCodes).toEqual(["I-DC-001"]);
+    expect(switchPeak?.status).toBe("missing_rating");
+    expect(switchPeak?.issueCodes).toEqual(["W-DC-001"]);
+    expect(switchPeak?.dutyValue).toBeNull();
+    expect(switchPeak?.ratingValue).toBeNull();
+    expect(switchPeak?.utilizationPct).toBeNull();
+    expect(switchPeak?.marginValue).toBeNull();
 
     const busSht = bundle.dutyCheck.equipmentResults.find(
       (r) => r.criterion === "busShortTimeWithstand",
@@ -198,8 +205,29 @@ describe("runDutyCheckForBundle — per-row status mapping", () => {
     const busPeak = bundle.dutyCheck.equipmentResults.find(
       (r) => r.criterion === "busPeak",
     );
-    expect(busPeak?.status).toBe("not_applicable");
-    expect(busPeak?.issueCodes).toEqual(["I-DC-001"]);
+    expect(busPeak?.status).toBe("missing_rating");
+    expect(busPeak?.issueCodes).toEqual(["W-DC-001"]);
+    expect(busPeak?.dutyValue).toBeNull();
+    expect(busPeak?.ratingValue).toBeNull();
+    expect(busPeak?.utilizationPct).toBeNull();
+    expect(busPeak?.marginValue).toBeNull();
+  });
+
+  it("preserves the breaker peak opt-out (peakWithstandKa absent → not_applicable + I-DC-001)", () => {
+    // Regression guard: only breakers carry the peak opt-out per
+    // ED-OQ-03. The fix that flipped switch/bus peak away from
+    // opt-out must NOT touch the breaker peak branch.
+    const sc = fakeShortCircuitBundle("SCN-A", "valid");
+    const bundle = runDutyCheckForBundle(sc, {
+      project: projectWithDutyEquipment({ withPeakOptOutBreaker: true }),
+    });
+    const peakRow = bundle.dutyCheck.equipmentResults.find(
+      (r) =>
+        r.equipmentInternalId === "eq_brk_optout" &&
+        r.criterion === "breakerPeak",
+    );
+    expect(peakRow?.status).toBe("not_applicable");
+    expect(peakRow?.issueCodes).toEqual(["I-DC-001"]);
   });
 
   it("emits missing_rating for cable without shortCircuitKValue and not_evaluated when present", () => {

@@ -46,7 +46,7 @@ describe("evaluateDutyCheckReadiness — blocked branches", () => {
     expect(result.issues[0]?.message).toContain("failed");
   });
 
-  it("returns blocked_by_validation when the project is blocked, regardless of SC availability", () => {
+  it("returns blocked_by_validation when the project status is blocked_by_validation", () => {
     const sc = fakeShortCircuitBundle("SCN-A", "valid");
     const result = evaluateDutyCheckReadiness({
       shortCircuit: sc,
@@ -64,9 +64,56 @@ describe("evaluateDutyCheckReadiness — blocked branches", () => {
     });
     expect(result.status).toBe("blocked_by_validation");
     expect(result.shortCircuit).toBeNull();
+    expect(result.issues[0]?.message).toContain("blocked");
     // The wrapper preserves the upstream issues on the validation
     // summary so retention can audit the readiness signal.
     expect(result.validationSummary.issues.some((i) => i.code === "E-EQ-001")).toBe(true);
+    expect(result.validationSummary.issues.some((i) => i.code === "I-DC-002")).toBe(true);
+  });
+
+  it("returns blocked_by_validation when project status is not_evaluated (validation has not been run)", () => {
+    const sc = fakeShortCircuitBundle("SCN-A", "valid");
+    const result = evaluateDutyCheckReadiness({
+      shortCircuit: sc,
+      projectValidation: {
+        status: "not_evaluated",
+        networkBuildStatus: "not_evaluated",
+        issues: [],
+      },
+    });
+    expect(result.status).toBe("blocked_by_validation");
+    expect(result.shortCircuit).toBeNull();
+    expect(result.issues[0]?.message).toContain("not been evaluated");
+    expect(result.validationSummary.status).toBe("not_evaluated");
+    expect(result.validationSummary.issues.some((i) => i.code === "I-DC-002")).toBe(true);
+  });
+
+  it("returns blocked_by_validation when networkBuildStatus is invalid even if status reads ready_to_run", () => {
+    // Defense in depth: a caller may report ready_to_run at the
+    // status field while the AppNetwork build itself failed
+    // (topology gap, etc.). The wrapper inspects networkBuildStatus
+    // independently so the duty check does not run against an
+    // unbuildable network.
+    const sc = fakeShortCircuitBundle("SCN-A", "valid");
+    const result = evaluateDutyCheckReadiness({
+      shortCircuit: sc,
+      projectValidation: {
+        status: "ready_to_run",
+        networkBuildStatus: "invalid",
+        issues: [
+          {
+            code: "E-NET-002",
+            severity: "error",
+            message: "floating bus detected",
+          },
+        ],
+      },
+    });
+    expect(result.status).toBe("blocked_by_validation");
+    expect(result.shortCircuit).toBeNull();
+    expect(result.issues[0]?.message).toContain("AppNetwork");
+    expect(result.validationSummary.networkBuildStatus).toBe("invalid");
+    expect(result.validationSummary.issues.some((i) => i.code === "E-NET-002")).toBe(true);
     expect(result.validationSummary.issues.some((i) => i.code === "I-DC-002")).toBe(true);
   });
 });
