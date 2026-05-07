@@ -51,6 +51,7 @@ import {
   runLoadFlowForAppNetwork,
   runShortCircuitForAppNetwork,
   type LoadFlowRunBundle,
+  type RuntimeValidationSummary,
   type ShortCircuitRunBundle,
   type SidecarTransport,
 } from "@power-system-study/solver-adapter";
@@ -61,6 +62,12 @@ import {
   type CalculationLifecycle,
   type CalculationStoreState,
 } from "@power-system-study/calculation-store";
+import {
+  evaluateDutyCheckReadiness,
+  runDutyCheckForBundle,
+  type DutyCheckReadinessResult,
+  type DutyCheckRunBundle,
+} from "@power-system-study/duty-check";
 import type { ValidationSummary } from "@power-system-study/schemas";
 
 import { useProjectState } from "./projectStore.js";
@@ -171,10 +178,100 @@ function shortCircuitReducer(
   }
 }
 
+/**
+ * Lifecycle of the React-side Duty Check active slot. Mirrors the
+ * Short Circuit slot: Equipment Duty has no sidecar, so the run
+ * itself is synchronous, but the slot still tracks idle / running /
+ * succeeded / warning / failed / stale so the UI can render a
+ * consistent module status (Equipment Duty spec §4.6).
+ */
+export type DutyCheckLifecycle =
+  | "idle"
+  | "running"
+  | "succeeded"
+  | "warning"
+  | "failed"
+  | "stale";
+
+/** React-side Duty Check active state. Held outside the project file. */
+export interface DutyCheckState {
+  lifecycle: DutyCheckLifecycle;
+  /** Latest active duty bundle. `null` until a real run has happened. */
+  bundle: DutyCheckRunBundle | null;
+  /** Top-level error when the duty run could not start (e.g., readiness blocked). */
+  startError: string | null;
+  /** ISO timestamp of the latest duty run. */
+  lastRunAt: string | null;
+}
+
+const initialDutyCheckState: DutyCheckState = {
+  lifecycle: "idle",
+  bundle: null,
+  startError: null,
+  lastRunAt: null,
+};
+
+type DutyCheckAction =
+  | { type: "dcStarted"; at: string }
+  | {
+      type: "dcSucceeded";
+      bundle: DutyCheckRunBundle;
+      at: string;
+      finalStatus: "valid" | "warning";
+    }
+  | {
+      type: "dcFailed";
+      at: string;
+      message: string;
+      bundle?: DutyCheckRunBundle;
+    }
+  | { type: "dcMarkStale" }
+  | { type: "dcClear" };
+
+function dutyCheckReducer(
+  state: DutyCheckState,
+  action: DutyCheckAction,
+): DutyCheckState {
+  switch (action.type) {
+    case "dcStarted":
+      return {
+        ...state,
+        lifecycle: "running",
+        lastRunAt: action.at,
+        startError: null,
+      };
+    case "dcSucceeded":
+      return {
+        ...state,
+        lifecycle: action.finalStatus === "warning" ? "warning" : "succeeded",
+        bundle: action.bundle,
+        startError: null,
+        lastRunAt: action.at,
+      };
+    case "dcFailed":
+      return {
+        ...state,
+        lifecycle: "failed",
+        ...(action.bundle !== undefined ? { bundle: action.bundle } : {}),
+        startError: action.message,
+        lastRunAt: action.at,
+      };
+    case "dcMarkStale":
+      if (state.bundle === null || state.lifecycle === "stale") return state;
+      return { ...state, lifecycle: "stale" };
+    case "dcClear":
+      return initialDutyCheckState;
+  }
+}
+
 export interface CalculationContextValue {
   state: CalculationStoreState;
   /** React-side Short Circuit active slot (spec §8.2.1). */
   shortCircuit: ShortCircuitState;
+  /** React-side Equipment Duty active slot (Equipment Duty spec §4.6). */
+  dutyCheck: DutyCheckState;
+  /** Readiness result for Equipment Duty (computed each render). */
+  dutyCheckReadiness: DutyCheckReadinessResult;
   /** True when readiness allows the user to click Run Load Flow / Voltage Drop. */
   canRun: boolean;
   /** Reason the Load Flow Run button is disabled, when applicable. */
@@ -183,10 +280,16 @@ export interface CalculationContextValue {
   canRunShortCircuit: boolean;
   /** Reason the Short Circuit Run button is disabled, when applicable. */
   shortCircuitDisabledReason: string | null;
+  /** True when readiness allows the user to click Run Equipment Duty. */
+  canRunDutyCheck: boolean;
+  /** Reason the Equipment Duty Run button is disabled, when applicable. */
+  dutyCheckDisabledReason: string | null;
   /** Trigger the Load Flow + Voltage Drop run. */
   runCalculation: () => Promise<void>;
   /** Trigger the Short Circuit run (Stage 3 PR #5). */
   runShortCircuit: () => Promise<void>;
+  /** Trigger the Equipment Duty run (Stage 3 ED-PR-04). */
+  runDutyCheck: () => void;
   resetCalculation: () => void;
 }
 
@@ -225,6 +328,10 @@ export function CalculationProvider({
     shortCircuitReducer,
     initialShortCircuitState,
   );
+  const [dutyCheck, dispatchDc] = useReducer(
+    dutyCheckReducer,
+    initialDutyCheckState,
+  );
   const lastProjectRef = useRef(projectState.project);
   const nowFn = now ?? (() => new Date().toISOString());
 
@@ -250,6 +357,17 @@ export function CalculationProvider({
       queueMicrotask(() => {
         dispatch({ type: "markStale" });
         dispatchSc({ type: "scMarkStale" });
+      });
+    }
+    // ED-PR-04: parallel Duty Check stale tracking. The runtime
+    // calculation-store reducer's `markStale` already flips the
+    // retained duty-check record's stale flag (Equipment Duty spec
+    // §4.6 / §10.5); the React-side active slot needs its own flip
+    // so the panel surfaces a stale badge for the duty module.
+    if (dutyCheck.bundle !== null && dutyCheck.lifecycle !== "stale") {
+      queueMicrotask(() => {
+        dispatch({ type: "markStale" });
+        dispatchDc({ type: "dcMarkStale" });
       });
     }
   }
@@ -446,32 +564,165 @@ export function CalculationProvider({
     }
   }, [transport, projectState.project, nowFn]);
 
+  // ED-PR-04: Equipment Duty readiness gate. We translate the
+  // editor-facing `ValidationSummary` into the orchestrator's
+  // `RuntimeValidationSummary` shape and ask the duty-check
+  // readiness wrapper to decide. The wrapper is the single source
+  // of truth for the four block reasons (`blocked_by_validation`,
+  // `blocked_by_upstream`, `blocked_by_stale_upstream`,
+  // `ready_to_run`) per Equipment Duty spec §4.6 / ED-PR-03 brief.
+  const dutyCheckReadiness = useMemo<DutyCheckReadinessResult>(() => {
+    const projectValidation: RuntimeValidationSummary = {
+      status: hasValidationErrors
+        ? "blocked_by_validation"
+        : validation.status === "warning"
+          ? "ran_with_warnings"
+          : "ready_to_run",
+      networkBuildStatus: hasValidationErrors ? "invalid" : "valid",
+      issues: validation.issues.map((i) => ({
+        code: i.code,
+        severity: i.severity,
+        message: i.message,
+      })),
+    };
+    return evaluateDutyCheckReadiness({
+      shortCircuit: shortCircuit.bundle,
+      shortCircuitStale: shortCircuit.lifecycle === "stale",
+      projectValidation,
+    });
+  }, [
+    validation.status,
+    validation.issues,
+    hasValidationErrors,
+    shortCircuit.bundle,
+    shortCircuit.lifecycle,
+  ]);
+
+  const dutyCheckDisabledReason = useMemo<string | null>(() => {
+    if (dutyCheck.lifecycle === "running")
+      return "An Equipment Duty run is already in progress.";
+    if (state.lifecycle === "running")
+      return "A calculation run is already in progress.";
+    if (shortCircuit.lifecycle === "running")
+      return "A Short Circuit run is already in progress.";
+    if (dutyCheckReadiness.status !== "ready_to_run") {
+      return dutyCheckReadiness.issues[0]?.message ?? "Equipment Duty is blocked.";
+    }
+    return null;
+  }, [
+    dutyCheck.lifecycle,
+    state.lifecycle,
+    shortCircuit.lifecycle,
+    dutyCheckReadiness,
+  ]);
+
+  const canRunDutyCheck = dutyCheckDisabledReason === null;
+
+  const runDutyCheck = useCallback(() => {
+    if (dutyCheckReadiness.status !== "ready_to_run" || dutyCheckReadiness.shortCircuit === null) {
+      const message =
+        dutyCheckReadiness.issues[0]?.message ??
+        "Equipment Duty cannot run: readiness blocked.";
+      const failedAt = nowFn();
+      dispatchDc({ type: "dcFailed", message, at: failedAt });
+      return;
+    }
+    const startedAt = nowFn();
+    dispatchDc({ type: "dcStarted", at: startedAt });
+    try {
+      const bundle = runDutyCheckForBundle(dutyCheckReadiness.shortCircuit, {
+        project: projectState.project,
+        validation: dutyCheckReadiness.validationSummary,
+        now: () => new Date(startedAt),
+      });
+      const at = nowFn();
+      const status = bundle.dutyCheck.status;
+      if (status === "failed") {
+        const firstError = bundle.dutyCheck.issues.find(
+          (i) => i.severity === "warning",
+        );
+        const message = firstError
+          ? `${firstError.code}: ${firstError.message}`
+          : "Equipment Duty failed.";
+        dispatchDc({ type: "dcFailed", at, message, bundle });
+        // Route the failed duty bundle through the calculation-store
+        // reducer so its snapshot is retained on `lastFailedSnapshot`
+        // (Equipment Duty spec §4.6 retention rules).
+        dispatch({
+          type: "runFailed",
+          at,
+          message,
+          bundle,
+          build: null,
+          reason: "runtime_failure",
+        });
+      } else {
+        dispatchDc({
+          type: "dcSucceeded",
+          at,
+          bundle,
+          finalStatus: status,
+        });
+        // The calculation-store reducer retains the duty bundle under
+        // the `duty_check_bundle` key; it does NOT displace the
+        // LF-narrow active slot (Equipment Duty spec §4.6 active-slot
+        // asymmetry). The build is reused from the upstream SC run —
+        // duty check does not rebuild the AppNetwork (Equipment Duty
+        // spec §4.6 / ED-OQ-06: pure TypeScript over the SC bundle).
+        const reusedBuild =
+          shortCircuit.build ??
+          ({
+            status: "valid",
+            appNetwork: bundle.snapshot.appNetwork,
+            issues: [],
+            warnings: [],
+          } as NetworkBuildResult);
+        dispatch({ type: "runSucceeded", bundle, build: reusedBuild, at });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const at = nowFn();
+      dispatchDc({ type: "dcFailed", message, at });
+    }
+  }, [dutyCheckReadiness, projectState.project, shortCircuit.build, nowFn]);
+
   const resetCalculation = useCallback(() => {
     dispatch({ type: "clearResults" });
     dispatchSc({ type: "scClear" });
+    dispatchDc({ type: "dcClear" });
   }, []);
 
   const value = useMemo<CalculationContextValue>(
     () => ({
       state,
       shortCircuit,
+      dutyCheck,
+      dutyCheckReadiness,
       canRun,
       disabledReason,
       canRunShortCircuit,
       shortCircuitDisabledReason,
+      canRunDutyCheck,
+      dutyCheckDisabledReason,
       runCalculation,
       runShortCircuit,
+      runDutyCheck,
       resetCalculation,
     }),
     [
       state,
       shortCircuit,
+      dutyCheck,
+      dutyCheckReadiness,
       canRun,
       disabledReason,
       canRunShortCircuit,
       shortCircuitDisabledReason,
+      canRunDutyCheck,
+      dutyCheckDisabledReason,
       runCalculation,
       runShortCircuit,
+      runDutyCheck,
       resetCalculation,
     ],
   );

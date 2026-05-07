@@ -36,12 +36,21 @@ import type {
   ShortCircuitResult,
   VoltageDropIssue,
 } from "@power-system-study/solver-adapter";
+import type { DutyCheckIssue, DutyCheckResult } from "@power-system-study/duty-check";
 
 import { useCalculation } from "../state/calculationStore.js";
+import { useProjectState } from "../state/projectStore.js";
 import { ResultTables } from "./ResultTables.js";
 import { ShortCircuitResultTable } from "./ShortCircuitResultTable.js";
+import { DutyCheckResultTable } from "./DutyCheckResultTable.js";
 
-type StageModuleId = "loadFlow" | "voltageDrop" | "shortCircuit" | "cableSizing" | "report";
+type StageModuleId =
+  | "loadFlow"
+  | "voltageDrop"
+  | "shortCircuit"
+  | "equipmentDuty"
+  | "cableSizing"
+  | "report";
 
 type ModuleDescriptor = {
   id: StageModuleId;
@@ -53,6 +62,7 @@ const STAGE_MODULES: ModuleDescriptor[] = [
   { id: "loadFlow", label: "Load Flow", futureStage: null },
   { id: "voltageDrop", label: "Voltage Drop", futureStage: null },
   { id: "shortCircuit", label: "Short Circuit", futureStage: null },
+  { id: "equipmentDuty", label: "Equipment Duty", futureStage: null },
   { id: "cableSizing", label: "Cable Sizing", futureStage: "Stage 4" },
   { id: "report", label: "Report Export", futureStage: "Stage 5" },
 ];
@@ -133,13 +143,19 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
   const {
     state,
     shortCircuit,
+    dutyCheck,
+    dutyCheckReadiness,
     canRun,
     disabledReason,
     canRunShortCircuit,
     shortCircuitDisabledReason,
+    canRunDutyCheck,
+    dutyCheckDisabledReason,
     runCalculation,
     runShortCircuit,
+    runDutyCheck,
   } = useCalculation();
+  const { state: projectState } = useProjectState();
 
   const errorIssues = useMemo(
     () => validation.issues.filter((i) => i.severity === "error"),
@@ -151,12 +167,23 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
     const lfStatus = computeLoadFlowModuleStatus("loadFlow", state, hasValidationErrors);
     const vdStatus = computeLoadFlowModuleStatus("voltageDrop", state, hasValidationErrors);
     const scStatus = computeShortCircuitModuleStatus(shortCircuit, hasValidationErrors);
-    return { loadFlow: lfStatus, voltageDrop: vdStatus, shortCircuit: scStatus };
-  }, [state, shortCircuit, hasValidationErrors]);
+    const dcStatus = computeDutyCheckModuleStatus(
+      dutyCheck,
+      dutyCheckReadiness.status,
+      hasValidationErrors,
+    );
+    return {
+      loadFlow: lfStatus,
+      voltageDrop: vdStatus,
+      shortCircuit: scStatus,
+      equipmentDuty: dcStatus,
+    };
+  }, [state, shortCircuit, dutyCheck, dutyCheckReadiness.status, hasValidationErrors]);
 
   const lifecycle = state.lifecycle;
   const bundle = state.bundle;
   const scResult = shortCircuit.bundle?.shortCircuit ?? null;
+  const dcResult = dutyCheck.bundle?.dutyCheck ?? null;
 
   return (
     <div style={styles.wrapper} data-testid="calculation-status-panel">
@@ -183,6 +210,18 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
             ? "Running Short Circuit…"
             : "Run Short Circuit"}
         </button>
+        <button
+          type="button"
+          style={styles.runButton(canRunDutyCheck)}
+          onClick={() => runDutyCheck()}
+          disabled={!canRunDutyCheck}
+          aria-disabled={!canRunDutyCheck}
+          data-testid="calc-run-dc-button"
+        >
+          {dutyCheck.lifecycle === "running"
+            ? "Running Equipment Duty…"
+            : "Run Equipment Duty"}
+        </button>
         {lifecycle === "stale" ? (
           <span style={styles.staleBadge} data-testid="calc-stale-badge">
             Stale — re-run for latest inputs
@@ -191,6 +230,11 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
         {shortCircuit.lifecycle === "stale" ? (
           <span style={styles.staleBadge} data-testid="calc-sc-stale-badge">
             SC Stale — re-run for latest inputs
+          </span>
+        ) : null}
+        {dutyCheck.lifecycle === "stale" ? (
+          <span style={styles.staleBadge} data-testid="calc-dc-stale-badge">
+            Duty Stale — re-run for latest inputs
           </span>
         ) : null}
         {disabledReason ? (
@@ -204,6 +248,14 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
             data-testid="calc-sc-disabled-reason"
           >
             {shortCircuitDisabledReason}
+          </span>
+        ) : null}
+        {dutyCheckDisabledReason ? (
+          <span
+            style={{ fontSize: 12, color: "#64748b" }}
+            data-testid="calc-dc-disabled-reason"
+          >
+            {dutyCheckDisabledReason}
           </span>
         ) : null}
       </div>
@@ -229,7 +281,9 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
                 ? moduleStatuses.voltageDrop
                 : mod.id === "shortCircuit"
                   ? moduleStatuses.shortCircuit
-                  : "not_implemented";
+                  : mod.id === "equipmentDuty"
+                    ? moduleStatuses.equipmentDuty
+                    : "not_implemented";
           return (
             <li key={mod.id} style={styles.item} data-testid={`calc-module-${mod.id}`}>
               <span style={styles.itemLabel}>{mod.label}</span>
@@ -272,6 +326,8 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
 
       {scResult ? <ShortCircuitIssues issues={scResult.issues} /> : null}
 
+      {dcResult ? <DutyCheckIssues issues={dcResult.issues} /> : null}
+
       {bundle ? (
         <ResultTables
           loadFlow={bundle.loadFlow}
@@ -280,6 +336,8 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
       ) : null}
 
       <ShortCircuitResultTable result={scResult} />
+
+      <DutyCheckResultTable result={dcResult} project={projectState.project} />
     </div>
   );
 }
@@ -287,6 +345,7 @@ export function CalculationStatusPanel({ validation }: CalculationStatusPanelPro
 type StageModuleStatus =
   | "not_implemented"
   | "disabled_by_validation"
+  | "blocked_by_upstream"
   | "ready_to_run"
   | "running"
   | "succeeded"
@@ -316,6 +375,38 @@ function computeLoadFlowModuleStatus(
     : state.bundle.voltageDrop.status === "warning"
       ? "warning"
       : "failed";
+}
+
+function computeDutyCheckModuleStatus(
+  dutyCheck: ReturnType<typeof useCalculation>["dutyCheck"],
+  readinessStatus: ReturnType<typeof useCalculation>["dutyCheckReadiness"]["status"],
+  hasValidationErrors: boolean,
+): StageModuleStatus {
+  if (hasValidationErrors) return "disabled_by_validation";
+  switch (dutyCheck.lifecycle) {
+    case "running":
+      return "running";
+    case "stale":
+      return "stale";
+    case "succeeded":
+      return "succeeded";
+    case "warning":
+      return "warning";
+    case "failed":
+      return "failed";
+    case "idle":
+      // Distinguish "no SC bundle yet" from "SC ready, duty ready
+      // to run". The blocked_by_upstream signal is the contract
+      // surface from the readiness wrapper for both
+      // `blocked_by_upstream` and `blocked_by_stale_upstream`.
+      if (
+        readinessStatus === "blocked_by_upstream" ||
+        readinessStatus === "blocked_by_stale_upstream"
+      ) {
+        return "blocked_by_upstream";
+      }
+      return "ready_to_run";
+  }
 }
 
 function computeShortCircuitModuleStatus(
@@ -360,6 +451,8 @@ function describeModuleHint(
   switch (status) {
     case "disabled_by_validation":
       return `Disabled — fix ${errorCount} validation error${errorCount === 1 ? "" : "s"} first.`;
+    case "blocked_by_upstream":
+      return "Blocked — run Short Circuit first to provide upstream fault numerics.";
     case "running":
       return "Solver run in progress…";
     case "ready_to_run":
@@ -421,6 +514,28 @@ function ShortCircuitIssues({
       <ul style={styles.issueList}>
         {issues.map((issue: ShortCircuitIssue, i: number) => (
           <li key={`sc-${issue.code}-${i}`} data-testid={`calc-sc-issue-${issue.code}`}>
+            <code>{issue.code}</code> — {issue.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DutyCheckIssues({
+  issues,
+}: {
+  issues: DutyCheckResult["issues"];
+}) {
+  if (issues.length === 0) return null;
+  return (
+    <div style={styles.notice("info")} data-testid="calc-dc-result-issues">
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        Equipment Duty produced {issues.length} issue{issues.length === 1 ? "" : "s"}:
+      </div>
+      <ul style={styles.issueList}>
+        {issues.map((issue: DutyCheckIssue, i: number) => (
+          <li key={`dc-${issue.code}-${i}`} data-testid={`calc-dc-issue-${issue.code}`}>
             <code>{issue.code}</code> — {issue.message}
           </li>
         ))}
