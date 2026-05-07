@@ -39,6 +39,7 @@ export {
 } from "./reducer.js";
 
 export {
+  DUTY_CHECK_BUNDLE_MODULE,
   LOAD_FLOW_BUNDLE_MODULE,
   SHORT_CIRCUIT_BUNDLE_MODULE,
   deriveRetentionKey,

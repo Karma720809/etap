@@ -232,11 +232,20 @@ function applyRunFailed(
 /**
  * Discriminator helper: read the top-level status off whichever
  * runtime bundle was supplied. Mirrors the in-memory shapes returned
- * by `runLoadFlowForAppNetwork()` and `runShortCircuitForAppNetwork()`
- * — the calculation-store package itself does not import the bundle
- * types directly to keep the dependency surface narrow.
+ * by `runLoadFlowForAppNetwork()`, `runShortCircuitForAppNetwork()`,
+ * and `runDutyCheckForBundle()` — the calculation-store package
+ * itself does not import the bundle types directly to keep the
+ * dependency surface narrow.
+ *
+ * The duty-check bundle carries both `dutyCheck` AND `shortCircuit`
+ * (the latter is the upstream SC bundle it consumed), so the probe
+ * order matters: `dutyCheck` first, then `loadFlow`, then
+ * `shortCircuit` as the residual.
  */
 function isBundleFailed(bundle: RuntimeCalculationBundle): boolean {
+  if ("dutyCheck" in bundle) {
+    return bundle.dutyCheck.status === "failed";
+  }
   if ("loadFlow" in bundle) {
     return bundle.loadFlow.status === "failed";
   }
@@ -244,8 +253,7 @@ function isBundleFailed(bundle: RuntimeCalculationBundle): boolean {
 }
 
 function firstErrorMessage(bundle: RuntimeCalculationBundle): string | null {
-  const issues =
-    "loadFlow" in bundle ? bundle.loadFlow.issues : bundle.shortCircuit.issues;
+  const issues = bundleIssues(bundle);
   for (const issue of issues) {
     if (issue.severity === "error") {
       return `${issue.code}: ${issue.message}`;
@@ -254,6 +262,16 @@ function firstErrorMessage(bundle: RuntimeCalculationBundle): string | null {
   return null;
 }
 
+function bundleIssues(
+  bundle: RuntimeCalculationBundle,
+): ReadonlyArray<{ code: string; severity: string; message: string }> {
+  if ("dutyCheck" in bundle) return bundle.dutyCheck.issues;
+  if ("loadFlow" in bundle) return bundle.loadFlow.issues;
+  return bundle.shortCircuit.issues;
+}
+
 function defaultFailedMessage(bundle: RuntimeCalculationBundle): string {
-  return "loadFlow" in bundle ? "Load Flow failed." : "Short Circuit failed.";
+  if ("dutyCheck" in bundle) return "Equipment Duty failed.";
+  if ("loadFlow" in bundle) return "Load Flow failed.";
+  return "Short Circuit failed.";
 }

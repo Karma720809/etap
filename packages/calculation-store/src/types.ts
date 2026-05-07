@@ -23,6 +23,7 @@
 //     the canonicalized retention key is enough and trivially
 //     serializable in tests.
 
+import type { DutyCheckRunBundle } from "@power-system-study/duty-check";
 import type { NetworkBuildResult } from "@power-system-study/network-model";
 import type {
   LoadFlowRunBundle,
@@ -46,16 +47,20 @@ export type CalculationLifecycle =
 /**
  * Canonical module identifier for retention. Stage 2 ships the Load
  * Flow + Voltage Drop bundle under `"load_flow_bundle"`; Stage 3 PR #4
- * widens the union to include `"short_circuit_bundle"` for the
- * `ShortCircuitRunBundle` retention slot (spec §8.2). Each value
- * pairs with a single bundle shape on
- * `RuntimeCalculationRecord.bundle`:
- *   - `"load_flow_bundle"`   ↔ `LoadFlowRunBundle`
+ * adds `"short_circuit_bundle"` for the `ShortCircuitRunBundle`
+ * retention slot (spec §8.2); Stage 3 ED-PR-03 adds
+ * `"duty_check_bundle"` for the `DutyCheckRunBundle` retention slot
+ * (Equipment Duty spec §4.6 / ED-OQ-06). Each value pairs with a
+ * single bundle shape on `RuntimeCalculationRecord.bundle`:
+ *   - `"load_flow_bundle"`     ↔ `LoadFlowRunBundle`
  *   - `"short_circuit_bundle"` ↔ `ShortCircuitRunBundle`
+ *   - `"duty_check_bundle"`    ↔ `DutyCheckRunBundle`
  *
- * Note: `ShortCircuitResult.module = "shortCircuit"` (the result-API
- * field) is **distinct** from this retention key; both identify the
- * Short Circuit calculation but live on different APIs (spec §7.2).
+ * Note: `ShortCircuitResult.module = "shortCircuit"` and
+ * `DutyCheckResult.module = "dutyCheck"` (the result-API fields)
+ * are **distinct** from these retention keys; both identify the
+ * same calculation but live on different APIs (spec §7.2 +
+ * Equipment Duty spec §4.6).
  *
  * Future stages (Cable Sizing, report export) will widen this union
  * further when they actually land; the surface stays narrow on
@@ -64,19 +69,26 @@ export type CalculationLifecycle =
  */
 export type CalculationModule =
   | "load_flow_bundle"
-  | "short_circuit_bundle";
+  | "short_circuit_bundle"
+  | "duty_check_bundle";
 
 /**
  * Discriminated union of runtime bundles supported by the retention
- * layer (spec §8.2). The retention key's `module` field is the
- * discriminator: Load Flow records carry a `LoadFlowRunBundle`, Short
- * Circuit records carry a `ShortCircuitRunBundle`. Disk persistence
- * remains deferred (S2-FU-07 / S3-FU-10); this union is purely an
- * in-memory shape.
+ * layer (spec §8.2 + Equipment Duty spec §4.6). The retention key's
+ * `module` field is the discriminator:
+ *   - Load Flow records carry a `LoadFlowRunBundle` (`loadFlow` field).
+ *   - Short Circuit records carry a `ShortCircuitRunBundle`
+ *     (`shortCircuit` field).
+ *   - Equipment Duty records carry a `DutyCheckRunBundle`
+ *     (`dutyCheck` field).
+ *
+ * Disk persistence remains deferred (S2-FU-07 / S3-FU-10 / Equipment
+ * Duty spec §10); this union is purely an in-memory shape.
  */
 export type RuntimeCalculationBundle =
   | LoadFlowRunBundle
-  | ShortCircuitRunBundle;
+  | ShortCircuitRunBundle
+  | DutyCheckRunBundle;
 
 /**
  * Retention key per spec §10.5: latest successful result is kept per

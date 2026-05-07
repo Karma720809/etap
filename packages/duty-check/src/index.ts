@@ -1,9 +1,14 @@
-// Stage 3 ED-PR-02 — `@power-system-study/duty-check` public surface.
+// Stage 3 ED-PR-02 / ED-PR-03 — `@power-system-study/duty-check`
+// public surface.
 //
-// Type-only contract surface for the Equipment Duty Check engine.
-// ED-PR-02 ships only the contract; the orchestrator, readiness
-// wrapper, retention slot, and UI land in ED-PR-03..04 and consume
-// these types unchanged.
+// ED-PR-02 shipped the contract / type surface (status enums,
+// criterion discriminator, structural guards). ED-PR-03 adds the
+// orchestrator (`runDutyCheckForBundle`) and the readiness wrapper
+// (`evaluateDutyCheckReadiness`). The orchestrator is contract-level
+// only — it emits `not_evaluated` / `missing_rating` / `not_applicable`
+// rows from the available project + Short Circuit context and never
+// fabricates duty / rating / utilization / margin numerics. Real
+// engineering formulas land in a follow-up PR.
 
 export {
   DUTY_CHECK_CRITERIA,
@@ -39,3 +44,18 @@ export {
   type DutyCheckVerdictBasis,
   type DutyCheckWarningCode,
 } from "./types.js";
+
+export {
+  DEFAULT_DUTY_FAULT_CLEARING_S,
+  DEFAULT_DUTY_TMIN_S,
+  DUTY_CHECK_VERSION,
+  runDutyCheckForBundle,
+  type RunDutyCheckOptions,
+} from "./runner.js";
+
+export {
+  evaluateDutyCheckReadiness,
+  type DutyCheckReadinessResult,
+  type DutyCheckReadinessStatus,
+  type EvaluateDutyCheckReadinessArgs,
+} from "./readiness.js";

@@ -87,6 +87,9 @@ importers:
 
   packages/calculation-store:
     dependencies:
+      '@power-system-study/duty-check':
+        specifier: workspace:*
+        version: link:../duty-check
       '@power-system-study/network-model':
         specifier: workspace:*
         version: link:../network-model
@@ -119,6 +122,12 @@ importers:
 
   packages/duty-check:
     dependencies:
+      '@power-system-study/network-model':
+        specifier: workspace:*
+        version: link:../network-model
+      '@power-system-study/schemas':
+        specifier: workspace:*
+        version: link:../schemas
       '@power-system-study/solver-adapter':
         specifier: workspace:*
         version: link:../solver-adapter
