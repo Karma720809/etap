@@ -41,6 +41,14 @@ import {
   useProjectState,
 } from "../src/state/projectStore.js";
 
+// ED-PR-05 closeout — two carryover UI tests pin the stale-upstream
+// and failed-upstream `calc-dc-disabled-reason` paths flagged in
+// PR #23's Codex non-blocking review. The readiness wrapper
+// (`packages/duty-check/src/readiness.ts`) already routes both
+// states through the same `dutyCheckDisabledReason` surface as the
+// no-bundle case covered above; these tests are tests-only — no UI
+// behavior change is required.
+
 const VALID_SUMMARY: ValidationSummary = { status: "valid", issues: [] };
 const ERROR_SUMMARY: ValidationSummary = {
   status: "error",
@@ -141,6 +149,59 @@ class StubTransport implements SidecarTransport {
     request: ShortCircuitRequest,
   ): Promise<ShortCircuitSidecarResponse> {
     return fakeSuccessShortCircuitResponse(request);
+  }
+}
+
+// ED-PR-05 carryover — a stub that returns a wire-level
+// `failed_solver` SC response so the orchestrator normalizes
+// `bundle.shortCircuit.status` to `"failed"`. The duty-check
+// readiness wrapper then routes the upstream-failed message
+// through `dutyCheckDisabledReason`. No transport-level throw —
+// the wire status itself drives the failure.
+class FailedShortCircuitTransport implements SidecarTransport {
+  async health(): Promise<SidecarHealth> {
+    return {
+      sidecarName: "stub",
+      sidecarVersion: "0.0.0",
+      contractInputVersion: SOLVER_INPUT_VERSION,
+      solverName: "pandapower",
+      solverVersion: "stub",
+      status: "ok",
+    };
+  }
+  async runLoadFlow(input: SolverInput): Promise<SolverResult> {
+    return fakeSuccessSolverResult(input);
+  }
+  async runShortCircuit(
+    request: ShortCircuitRequest,
+  ): Promise<ShortCircuitSidecarResponse> {
+    return {
+      status: "failed_solver",
+      metadata: {
+        solverName: "pandapower",
+        solverVersion: "stub",
+        adapterVersion: "stub",
+        options: request.solverInput.options,
+        executedAt: "2026-05-02T00:00:00Z",
+        inputHash: null,
+        networkHash: null,
+      },
+      shortCircuit: {
+        calculationCase: "maximum",
+        faultType: "threePhase",
+        computePeak: request.shortCircuitOptions.computePeak,
+        computeThermal: request.shortCircuitOptions.computeThermal,
+        voltageFactor: 1,
+      },
+      buses: [],
+      issues: [
+        {
+          code: "E-SC-002",
+          severity: "error",
+          message: "Sidecar solver reported a fatal error (stub).",
+        },
+      ],
+    };
   }
 }
 
@@ -365,5 +426,144 @@ describe("CalculationStore — Equipment Duty serialization isolation (ED-PR-04)
     expect(parsed).not.toHaveProperty("calculationResults");
     expect(parsed.calculationSnapshots).toEqual([]);
     expect(captured.after).toBe(captured.before);
+  });
+});
+
+// ED-PR-05 carryover: explicit UI tests for the stale-SC and
+// failed-SC `dutyCheckDisabledReason` paths (PR #23 Codex
+// non-blocking review). Both paths are already wired through the
+// ED-PR-03 readiness wrapper; these tests pin the user-facing text
+// on the `calc-dc-disabled-reason` chip and the module status
+// rendered in the Equipment Duty row.
+describe("CalculationStatusPanel — Equipment Duty stale upstream (ED-PR-05 carryover)", () => {
+  it("disables Run Equipment Duty with the stale-upstream message after a project edit invalidates the SC bundle", async () => {
+    // Harness exposes the project dispatch so the test can flip the
+    // SC retention slot to stale via a project ref change. The panel
+    // itself does the surfacing.
+    function StaleHarness() {
+      const { dispatch: projectDispatch } = useProjectState();
+      return (
+        <>
+          <CalculationStatusPanel validation={VALID_SUMMARY} />
+          <button
+            type="button"
+            data-testid="harness-edit"
+            onClick={() =>
+              projectDispatch({
+                type: "addEquipment",
+                kind: "bus",
+                now: "2026-05-02T00:00:00Z",
+              })
+            }
+          />
+        </>
+      );
+    }
+
+    render(
+      <ProjectProvider
+        initial={{
+          project: getDemoFixture(),
+          selectedInternalId: null,
+          isDirty: false,
+        }}
+      >
+        <CalculationProvider
+          validation={VALID_SUMMARY}
+          transport={new StubTransport()}
+        >
+          <StaleHarness />
+        </CalculationProvider>
+      </ProjectProvider>,
+    );
+
+    // Establish a successful SC run so an SC bundle is retained and
+    // the readiness wrapper would otherwise return `ready_to_run`.
+    await act(async () => {
+      (screen.getByTestId("calc-run-sc-button") as HTMLButtonElement).click();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("result-table-short-circuit")).not.toBeNull();
+    });
+    const dcButton = screen.getByTestId("calc-run-dc-button") as HTMLButtonElement;
+    expect(dcButton.disabled).toBe(false);
+
+    // Mutate the project — the calculation store dispatches
+    // `markStale` + `scMarkStale` on the next render, flipping the
+    // React-side SC lifecycle to `"stale"`. The readiness wrapper
+    // then returns `blocked_by_stale_upstream` with its dedicated
+    // message.
+    await act(async () => {
+      (screen.getByTestId("harness-edit") as HTMLButtonElement).click();
+    });
+
+    await waitFor(() => {
+      // The SC stale badge appears once the lifecycle flips — use it
+      // as the synchronization signal so the duty-check readiness
+      // memo has consumed the new lifecycle.
+      expect(screen.queryByTestId("calc-sc-stale-badge")).not.toBeNull();
+    });
+
+    const dcButtonStale = screen.getByTestId(
+      "calc-run-dc-button",
+    ) as HTMLButtonElement;
+    expect(dcButtonStale.disabled).toBe(true);
+
+    const reason = screen.getByTestId("calc-dc-disabled-reason").textContent ?? "";
+    expect(reason).toMatch(/stale/i);
+    expect(reason).toMatch(/re-?run Short Circuit/i);
+
+    // The Equipment Duty module status cell collapses both
+    // `blocked_by_upstream` and `blocked_by_stale_upstream` into the
+    // single `blocked_by_upstream` literal (panel intentionally —
+    // the precise reason is on the disabled-reason chip).
+    expect(
+      screen.getByTestId("calc-module-equipmentDuty-status").textContent,
+    ).toBe("blocked_by_upstream");
+  });
+});
+
+describe("CalculationStatusPanel — Equipment Duty failed upstream (ED-PR-05 carryover)", () => {
+  it("disables Run Equipment Duty with the upstream-failed message when the SC run resolves to status=failed", async () => {
+    renderPanel({
+      validation: VALID_SUMMARY,
+      transport: new FailedShortCircuitTransport(),
+    });
+
+    // Equipment Duty is initially blocked because no SC run has
+    // happened — same `blocked_by_upstream` surface as the existing
+    // no-bundle test, just the starting state.
+    expect(
+      (screen.getByTestId("calc-run-dc-button") as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    // Fire the SC run. The wire response is `failed_solver`, so the
+    // orchestrator normalizes the bundle to
+    // `shortCircuit.status === "failed"`. The React store retains
+    // the failed bundle on the SC slot (`dispatchSc({ scFailed,
+    // bundle })`), so `shortCircuit.bundle !== null` on the next
+    // render — the readiness wrapper's branch-4 check
+    // (`args.shortCircuit.shortCircuit.status === "failed"`) is the
+    // one that fires here, not branch-2 (`shortCircuit === null`).
+    await act(async () => {
+      (screen.getByTestId("calc-run-sc-button") as HTMLButtonElement).click();
+    });
+
+    await waitFor(() => {
+      // The SC start-error notice appears once the failure routes
+      // through `dispatchSc({ scFailed, ... })`.
+      expect(screen.queryByTestId("calc-sc-start-error")).not.toBeNull();
+    });
+
+    const dcButton = screen.getByTestId("calc-run-dc-button") as HTMLButtonElement;
+    expect(dcButton.disabled).toBe(true);
+
+    const reason = screen.getByTestId("calc-dc-disabled-reason").textContent ?? "";
+    expect(reason).toMatch(/Short Circuit run failed/i);
+    expect(reason).toMatch(/Equipment Duty cannot evaluate/i);
+
+    expect(
+      screen.getByTestId("calc-module-equipmentDuty-status").textContent,
+    ).toBe("blocked_by_upstream");
   });
 });
